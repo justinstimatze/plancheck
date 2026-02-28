@@ -1,0 +1,35 @@
+#!/bin/sh
+# Pre-commit hook for plancheck
+
+# go vet
+echo "Running go vet..."
+go vet ./... 2>&1
+if [ $? -ne 0 ]; then
+    echo ""
+    echo "go vet failed. Fix issues or use --no-verify to skip."
+    exit 1
+fi
+
+# go test (only packages with changes)
+staged_go=$(git diff --cached --name-only -- '*.go' | grep -v '_test.go')
+if [ -n "$staged_go" ]; then
+    echo "Running go test -short..."
+    go test ./... -short 2>&1
+    if [ $? -ne 0 ]; then
+        echo ""
+        echo "Tests failed. Fix or use --no-verify to skip."
+        exit 1
+    fi
+fi
+
+# plancheck review — check for missing files
+if [ -x "./plancheck" ] && [ -d ".defn" ]; then
+    echo "Running plancheck review..."
+    review_output=$(./plancheck review HEAD 2>&1)
+    if echo "$review_output" | grep -q "MUST CHANGE"; then
+        echo "$review_output"
+        echo ""
+        echo "plancheck found files that may need changes. Review above or use --no-verify to skip."
+        # Warning only — don't block (false positives possible)
+    fi
+fi

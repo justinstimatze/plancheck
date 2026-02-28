@@ -1,0 +1,12 @@
+{
+  "objective": "Add authentication handler to the API",
+  "filesToRead": ["src/handlers/users.ts"],
+  "filesToModify": [],
+  "filesToCreate": ["src/handlers/auth.ts"],
+  "steps": [
+    "Create src/handlers/auth.ts with login and logout functions",
+    "Implement JWT validation in the auth handler",
+    "Add error handling for invalid tokens"
+  ],
+  "expectedOutcome": "Auth handler exists and handles login/logout"
+}

@@ -1,0 +1,13 @@
+{
+  "objective": "Add authentication handler to the API",
+  "filesToRead": ["src/handlers/users.ts", "src/router.ts"],
+  "filesToModify": ["src/router.ts"],
+  "filesToCreate": ["src/handlers/auth.ts"],
+  "steps": [
+    "Create src/handlers/auth.ts with login and logout functions",
+    "Implement JWT validation in the auth handler",
+    "Add error handling for invalid tokens",
+    "Import authHandler in router.ts and register /auth route"
+  ],
+  "expectedOutcome": "Auth handler exists, is imported by router.ts, and handles /auth requests"
+}

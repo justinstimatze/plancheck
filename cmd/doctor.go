@@ -1,0 +1,207 @@
+package cmd
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+type DoctorCmd struct{}
+
+func (c *DoctorCmd) Run() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = os.TempDir()
+	}
+
+	ok := true
+	check := func(name string, pass bool, detail string) {
+		if pass {
+			fmt.Printf("  ✓ %s\n", name)
+		} else {
+			fmt.Printf("  ✗ %s — %s\n", name, detail)
+			ok = false
+		}
+	}
+
+	fmt.Println("plancheck doctor")
+	fmt.Println()
+
+	// 1. Binary exists and is executable
+	exe, _ := os.Executable()
+	_, exeErr := os.Stat(exe)
+	check("binary", exeErr == nil, fmt.Sprintf("%s not found", exe))
+
+	// 2. MCP config in ~/.claude.json
+	claudeJSON := filepath.Join(home, ".claude.json")
+	claudeData, claudeErr := os.ReadFile(claudeJSON)
+	hasMCP := false
+	mcpPath := ""
+	if claudeErr == nil {
+		var cfg map[string]interface{}
+		if json.Unmarshal(claudeData, &cfg) == nil {
+			if servers, ok := cfg["mcpServers"].(map[string]interface{}); ok {
+				if pc, ok := servers["plancheck"].(map[string]interface{}); ok {
+					hasMCP = true
+					if cmd, ok := pc["command"].(string); ok {
+						mcpPath = cmd
+					}
+				}
+			}
+		}
+	}
+	check("MCP server in ~/.claude.json", hasMCP, "plancheck not found in mcpServers — run: claude mcp add --scope user plancheck -- /path/to/plancheck mcp")
+
+	if hasMCP && mcpPath != "" {
+		_, pathErr := os.Stat(mcpPath)
+		check("MCP binary path valid", pathErr == nil, fmt.Sprintf("%s does not exist", mcpPath))
+	}
+
+	// 3. NOT in ~/.claude/settings.json (common misconfiguration)
+	settingsJSON := filepath.Join(home, ".claude", "settings.json")
+	settingsData, settingsErr := os.ReadFile(settingsJSON)
+	staleMCP := false
+	if settingsErr == nil {
+		var cfg map[string]interface{}
+		if json.Unmarshal(settingsData, &cfg) == nil {
+			if servers, ok := cfg["mcpServers"].(map[string]interface{}); ok {
+				if _, ok := servers["plancheck"]; ok {
+					staleMCP = true
+				}
+			}
+		}
+	}
+	check("no stale MCP in settings.json", !staleMCP, "plancheck in ~/.claude/settings.json does nothing — MCP servers belong in ~/.claude.json")
+
+	// 4. Gate hook configured
+	hasGateHook := false
+	gateHookCmd := ""
+	if settingsErr == nil {
+		var cfg map[string]interface{}
+		if json.Unmarshal(settingsData, &cfg) == nil {
+			if hooks, ok := cfg["hooks"].(map[string]interface{}); ok {
+				if pre, ok := hooks["PreToolUse"].([]interface{}); ok {
+					for _, h := range pre {
+						if hm, ok := h.(map[string]interface{}); ok {
+							if hm["matcher"] == "ExitPlanMode" {
+								hasGateHook = true
+								if inner, ok := hm["hooks"].([]interface{}); ok && len(inner) > 0 {
+									if ih, ok := inner[0].(map[string]interface{}); ok {
+										if cmd, ok := ih["command"].(string); ok {
+											gateHookCmd = cmd
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	check("PreToolUse gate hook", hasGateHook, "no ExitPlanMode hook in ~/.claude/settings.json")
+
+	// 4b. Gate hook uses new format (delegates to plancheck gate)
+	if hasGateHook && gateHookCmd != "" {
+		scriptData, err := os.ReadFile(gateHookCmd)
+		stale := err == nil && !strings.Contains(string(scriptData), "gate")
+		check("gate hook format", !stale, "gate hook uses old bash format — run: plancheck setup")
+	}
+
+	// 4c. Suggest hook configured
+	hasSuggestHook := false
+	if settingsErr == nil {
+		var cfg map[string]interface{}
+		if json.Unmarshal(settingsData, &cfg) == nil {
+			if hooks, ok := cfg["hooks"].(map[string]interface{}); ok {
+				if post, ok := hooks["PostToolUse"].([]interface{}); ok {
+					for _, h := range post {
+						if hm, ok := h.(map[string]interface{}); ok {
+							if inner, ok := hm["hooks"].([]interface{}); ok {
+								for _, ih := range inner {
+									if ihm, ok := ih.(map[string]interface{}); ok {
+										if cmd, ok := ihm["command"].(string); ok {
+											if strings.Contains(cmd, "plancheck-suggest") {
+												hasSuggestHook = true
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	check("PostToolUse suggest hook", hasSuggestHook, "no suggest hook — run: plancheck setup")
+
+	// 4d. defn binary available
+	defnPath := ""
+	if p, err := os.Executable(); err == nil {
+		defnDir := filepath.Dir(p)
+		candidate := filepath.Join(defnDir, "defn")
+		if _, err := os.Stat(candidate); err == nil {
+			defnPath = candidate
+		}
+	}
+	if defnPath == "" {
+		if p := filepath.Join(home, "go", "bin", "defn"); true {
+			if _, err := os.Stat(p); err == nil {
+				defnPath = p
+			}
+		}
+	}
+	check("defn binary", defnPath != "", "defn not found — install: go install github.com/justinstimatze/defn@latest")
+
+	// 5. Skill file exists
+	skillPath := filepath.Join(home, ".claude", "skills", "check-plan", "SKILL.md")
+	_, skillErr := os.Stat(skillPath)
+	check("skill file", skillErr == nil, fmt.Sprintf("%s not found", skillPath))
+
+	// 6. Check for hash collisions in project dirs
+	projectsDir := filepath.Join(home, ".plancheck", "projects")
+	entries, _ := os.ReadDir(projectsDir)
+	cwdsByHash := make(map[string][]string)
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		projFile := filepath.Join(projectsDir, e.Name(), "project.txt")
+		data, err := os.ReadFile(projFile)
+		if err != nil {
+			continue
+		}
+		cwd := strings.TrimSpace(string(data))
+		cwdsByHash[e.Name()] = append(cwdsByHash[e.Name()], cwd)
+	}
+	collisions := 0
+	for _, cwds := range cwdsByHash {
+		if len(cwds) > 1 {
+			collisions++
+		}
+	}
+	check("no project hash collisions", collisions == 0, fmt.Sprintf("%d hash collisions detected in ~/.plancheck/projects/", collisions))
+
+	// 7. Check for old base64 hash directories
+	oldFormat := 0
+	for _, e := range entries {
+		name := e.Name()
+		// Old base64 hashes start with uppercase letters (L2hv...), new SHA256 hex is all lowercase hex
+		if len(name) == 16 && strings.ContainsAny(name[:1], "ABCDEFGHIJKLMNOPQRSTUVWXYZ+/") {
+			oldFormat++
+		}
+	}
+	check("no legacy hash directories", oldFormat == 0, fmt.Sprintf("%d old-format (base64) directories in ~/.plancheck/projects/ — delete them", oldFormat))
+
+	fmt.Println()
+	if ok {
+		fmt.Println("All checks passed.")
+	} else {
+		fmt.Println("Some checks failed. Fix the issues above.")
+		os.Exit(1)
+	}
+	return nil
+}

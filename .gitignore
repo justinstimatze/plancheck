@@ -1,0 +1,23 @@
+.plancheck/
+plancheck
+*.test
+.idea/
+.vscode/
+.claude/
+.DS_Store
+*.swp
+*.swo
+*~
+.dolt/
+
+# defn database
+.defn/
+.codex/
+defn
+
+# Dataset repo clones live in ~/.plancheck/datasets/repos/
+.plancheck-sim/
+.env
+.plancheck-debug.json
+__pycache__/
+.mcp.json
