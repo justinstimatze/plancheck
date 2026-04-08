@@ -3,9 +3,12 @@
 package types
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -31,6 +34,19 @@ type ExecutionPlan struct {
 	// TestPatch is the unified diff of test changes (from gold patch).
 	// Used for backward planning: test expectations → production file predictions.
 	TestPatch string `json:"testPatch,omitempty"`
+}
+
+// Hash returns a stable hash of the plan's identity (objective + files).
+// Used by the gate to detect plan rewrites and invalidate stale check results.
+func (p ExecutionPlan) Hash() string {
+	parts := []string{p.Objective}
+	files := make([]string, 0, len(p.FilesToModify)+len(p.FilesToCreate))
+	files = append(files, p.FilesToModify...)
+	files = append(files, p.FilesToCreate...)
+	sort.Strings(files)
+	parts = append(parts, files...)
+	h := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(h[:8]) // 16-char hex, enough to detect changes
 }
 
 // Invariant is a verifiable end-state requirement for the plan.
@@ -251,6 +267,7 @@ type Obligation struct {
 
 type PlanCheckResult struct {
 	HistoryID          string              `json:"historyId"`
+	PlanHash           string              `json:"planHash,omitempty"` // hash of objective+files, detects plan rewrites
 	ProjectType        string              `json:"projectType"`
 	PlanStats          PlanStats           `json:"planStats"`
 	MissingFiles       []MissingFileResult `json:"missingFiles,omitempty"`

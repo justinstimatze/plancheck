@@ -36,7 +36,7 @@ func writeCheckID(t *testing.T, dir, id string) {
 
 func simplePlanResult() types.PlanCheckResult {
 	return types.PlanCheckResult{
-		PlanStats: types.PlanStats{Steps: 4, FilesToModify: 2},
+		PlanStats: types.PlanStats{Steps: 6, FilesToModify: 3},
 	}
 }
 
@@ -92,7 +92,23 @@ func TestGate_MissingFiles_Blocks(t *testing.T) {
 	}
 }
 
-// ── Simple plan (≤10 steps/files): 2 checks needed ──
+// ── Trivial plan (≤4 steps/files): 1 check needed ──
+
+func TestGate_TrivialPlan_AllowsOnFirstCheck(t *testing.T) {
+	projectDir, stateFile := setupGateTest(t)
+
+	writeCheckID(t, projectDir, "check-1")
+	writeCheckResult(t, projectDir, types.PlanCheckResult{
+		PlanStats: types.PlanStats{Steps: 3, FilesToModify: 2},
+	})
+
+	d := evaluateGate("/fake/cwd", stateFile)
+	if !d.Allow {
+		t.Fatalf("expected allow for trivial plan after 1 check, got: %s", d.Message)
+	}
+}
+
+// ── Simple plan (5-10 steps/files): 2 checks needed ──
 
 func TestGate_SimplePlan_BlocksOnFirstCheck(t *testing.T) {
 	projectDir, stateFile := setupGateTest(t)
@@ -265,7 +281,7 @@ func TestGate_ComodGaps_InBlockMessage(t *testing.T) {
 
 	writeCheckID(t, projectDir, "check-1")
 	writeCheckResult(t, projectDir, types.PlanCheckResult{
-		PlanStats: types.PlanStats{Steps: 4, FilesToModify: 2},
+		PlanStats: types.PlanStats{Steps: 6, FilesToModify: 3},
 		ComodGaps: []types.ComodGap{
 			{PlanFile: "cmd/gate.go", ComodFile: "cmd/gate_test.go", Frequency: 0.8, Confidence: "high", Suggestion: "add to filesToModify"},
 		},
@@ -287,9 +303,9 @@ func TestGate_ComodGaps_DontPermanentlyBlock(t *testing.T) {
 	projectDir, stateFile := setupGateTest(t)
 
 	// High-confidence comod gaps should NOT permanently block.
-	// They warn on first check, but iteration still advances.
+	// With complexity 6 (needs 2 checks), gaps warn but don't prevent iteration.
 	comodResult := types.PlanCheckResult{
-		PlanStats: types.PlanStats{Steps: 4, FilesToModify: 2},
+		PlanStats: types.PlanStats{Steps: 6, FilesToModify: 4},
 		ComodGaps: []types.ComodGap{
 			{PlanFile: "cmd/gate.go", ComodFile: "README.md", Frequency: 0.8, Confidence: "high"},
 			{PlanFile: "cmd/gate.go", ComodFile: ".gitignore", Frequency: 0.6, Confidence: "high"},
@@ -308,12 +324,36 @@ func TestGate_ComodGaps_DontPermanentlyBlock(t *testing.T) {
 	}
 }
 
+func TestGate_PlanRewrite_ResetsState(t *testing.T) {
+	projectDir, stateFile := setupGateTest(t)
+
+	// First plan: complex (needs 2 checks)
+	writeCheckID(t, projectDir, "check-1")
+	writeCheckResult(t, projectDir, types.PlanCheckResult{
+		PlanHash:  "plan-a",
+		PlanStats: types.PlanStats{Steps: 8, FilesToModify: 5},
+	})
+	evaluateGate("/fake/cwd", stateFile) // attempt 1 — blocked
+
+	// Plan is rewritten (different hash) and re-checked
+	writeCheckID(t, projectDir, "check-2")
+	writeCheckResult(t, projectDir, types.PlanCheckResult{
+		PlanHash:  "plan-b",
+		PlanStats: types.PlanStats{Steps: 3, FilesToModify: 2}, // now trivial
+	})
+	d := evaluateGate("/fake/cwd", stateFile)
+	if !d.Allow {
+		t.Fatalf("expected allow after plan rewrite to trivial plan, got: %s", d.Message)
+	}
+}
+
 func TestRequiredChecks(t *testing.T) {
 	tests := []struct {
 		complexity int
 		want       int
 	}{
-		{0, 2}, {1, 2}, {5, 2}, {10, 2},
+		{0, 1}, {1, 1}, {3, 1}, {4, 1},
+		{5, 2}, {10, 2},
 		{11, 3}, {15, 3}, {20, 3},
 		{21, 4}, {30, 4}, {100, 4},
 	}

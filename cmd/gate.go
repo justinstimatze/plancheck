@@ -36,6 +36,7 @@ type gateState struct {
 	Attempts   int      `json:"attempts"`
 	ChecksSeen []string `json:"checksSeen"`
 	Complexity int      `json:"complexity"` // max(steps, files touched)
+	PlanHash   string   `json:"planHash"`   // detects plan rewrites → reset state
 }
 
 // gateDecision is the result of evaluating the gate logic.
@@ -93,6 +94,9 @@ func (c *GateCmd) Run() error {
 // requiredChecks returns the number of distinct check_plan runs needed
 // based on plan complexity. More complex plans need more verification rounds.
 func requiredChecks(complexity int) int {
+	if complexity <= 4 {
+		return 1 // trivial: single check sufficient
+	}
 	if complexity <= 10 {
 		return 2 // forward + backward + compare
 	}
@@ -130,6 +134,16 @@ func evaluateGate(cwd, stateFile string) gateDecision {
 	if err != nil {
 		// Can't load results — allow gracefully
 		return gateDecision{Allow: true}
+	}
+
+	// Detect plan rewrites: if the plan hash changed since the last check,
+	// reset iteration state so stale findings don't block the new plan.
+	if result.PlanHash != "" && state.PlanHash != "" && result.PlanHash != state.PlanHash {
+		state.ChecksSeen = nil
+		state.Complexity = 0
+	}
+	if result.PlanHash != "" {
+		state.PlanHash = result.PlanHash
 	}
 
 	// Block on missing files — ground-truth findings the plan must fix

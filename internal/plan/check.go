@@ -400,6 +400,7 @@ func Check(opts CheckOptions) types.PlanCheckResult {
 	}
 
 	result := types.PlanCheckResult{
+		PlanHash:    p.Hash(),
 		ProjectType: projectType,
 		PlanStats: types.PlanStats{
 			Steps:         len(p.Steps),
@@ -934,19 +935,31 @@ func additionPipeline(filesToCreate, steps []string, cwd string) ([]types.Signal
 		}
 	}
 
-	// 3. Search analogies (genre-filtered if genres found, all repos otherwise)
+	// 3. Search analogies (genre-filtered if genres found, all repos otherwise).
+	// Only emit analogies with file-path-like patterns (contain /).
+	// Patterns like "ServerArgs_Setup" are noise from unrelated repos.
 	for _, kw := range uniqueKW {
 		result := forecast.FindAnalogiesInRepos(kw, genreRepos)
 		if result.Repos > 0 {
-			patternPreview := result.Pattern
-			if len(patternPreview) > 3 {
-				patternPreview = patternPreview[:3]
+			// Filter to path-like patterns only
+			var relevant []string
+			for _, p := range result.Pattern {
+				if strings.Contains(p, "/") {
+					relevant = append(relevant, p)
+				}
+			}
+			if len(relevant) == 0 {
+				continue
+			}
+			preview := relevant
+			if len(preview) > 3 {
+				preview = preview[:3]
 			}
 			sigs = append(sigs, types.Signal{
 				Probe:   "analogy",
-				Message: fmt.Sprintf("%s: found in %d repos. Common pattern: %v", kw, result.Repos, patternPreview),
+				Message: fmt.Sprintf("%s: found in %d repos. Common pattern: %v", kw, result.Repos, preview),
 			})
-			for _, p := range result.Pattern {
+			for _, p := range relevant {
 				ranked = append(ranked, types.RankedFile{
 					File:   p,
 					Score:  0.4,
@@ -968,7 +981,7 @@ func additionPipeline(filesToCreate, steps []string, cwd string) ([]types.Signal
 	for dir := range newDirs {
 		pkgName := filepath.Base(dir)
 		scout, err := simulate.BackwardScout(cwd, pkgName, "")
-		if err == nil && len(scout.Prerequisites) > 0 {
+		if err == nil && len(scout.Prerequisites) > 0 && scout.PatternSource != "" {
 			sigs = append(sigs, types.Signal{
 				Probe:   "backward-scout",
 				Message: fmt.Sprintf("New package %s: %d prerequisites (pattern: %s)", pkgName, len(scout.Prerequisites), scout.PatternSource),
