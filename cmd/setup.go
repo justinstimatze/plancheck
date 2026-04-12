@@ -310,7 +310,24 @@ exec %s gate
 func buildSuggestHook(binary string) string {
 	return fmt.Sprintf(`#!/bin/bash
 # PostToolUse: plancheck suggest after Go file edits. Shows MUST CHANGE only.
-# Fire-and-forget: no set -e, always exits 0.
+# Fire-and-forget: no set -e, always exits 0. Unexpected failures log to
+# ~/.plancheck/hook-errors.log so plancheck doctor can surface them.
+
+ERR_LOG="$HOME/.plancheck/hook-errors.log"
+log_err() {
+  mkdir -p "$HOME/.plancheck" 2>/dev/null
+  echo "[$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)] $*" >> "$ERR_LOG" 2>/dev/null
+  # Bounded log: keep last 100 lines once it exceeds 200
+  if [ -f "$ERR_LOG" ] && [ "$(wc -l < "$ERR_LOG" 2>/dev/null || echo 0)" -gt 200 ]; then
+    tail -100 "$ERR_LOG" > "$ERR_LOG.tmp" 2>/dev/null && mv "$ERR_LOG.tmp" "$ERR_LOG" 2>/dev/null
+  fi
+}
+
+if ! command -v python3 >/dev/null 2>&1; then
+  log_err "python3 not found — hook cannot parse Claude Code input payload"
+  exit 0
+fi
+
 INPUT=$(cat)
 CWD=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('cwd',''))" 2>/dev/null || true)
 FILE_PATH=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('file_path',''))" 2>/dev/null || true)
@@ -330,7 +347,18 @@ fi
 if [ "$(wc -l < "$SF" 2>/dev/null || echo 0)" -lt 2 ]; then exit 0; fi
 FJ=$(python3 -c "import json; print(json.dumps([l.strip() for l in open('$SF') if l.strip()]))" 2>/dev/null)
 if [ -z "$FJ" ]; then exit 0; fi
-R=$(echo "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"suggest\",\"arguments\":{\"files_touched\":$(echo "$FJ" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read().strip()))"),\"cwd\":\"$CWD\"}}}" | timeout 30 %s mcp 2>/dev/null | python3 -c "
+
+# Call plancheck mcp, capturing stderr separately so real failures get logged
+MCP_ERR=$(mktemp 2>/dev/null || echo "/tmp/plancheck-hook-err.$$")
+MCP_OUT=$(echo "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"suggest\",\"arguments\":{\"files_touched\":$(echo "$FJ" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read().strip()))"),\"cwd\":\"$CWD\"}}}" | timeout 30 %s mcp 2>"$MCP_ERR")
+MCP_STATUS=$?
+if [ $MCP_STATUS -ne 0 ] && [ $MCP_STATUS -ne 124 ]; then
+  # 124 is timeout, which is expected under heavy load; log anything else
+  log_err "plancheck mcp failed (exit $MCP_STATUS): $(head -c 200 "$MCP_ERR" 2>/dev/null)"
+fi
+rm -f "$MCP_ERR"
+
+R=$(echo "$MCP_OUT" | python3 -c "
 import json, sys
 for line in sys.stdin:
     line = line.strip()

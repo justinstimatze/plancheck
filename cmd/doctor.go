@@ -148,6 +148,23 @@ func (c *DoctorCmd) Run() error {
 		check("suggest hook up-to-date", !hasBug, "suggest hook has the set -e bug — re-run: plancheck setup")
 	}
 
+	// 4c2. Surface recent hook failures from ~/.plancheck/hook-errors.log
+	hookLog := filepath.Join(home, ".plancheck", "hook-errors.log")
+	if data, err := os.ReadFile(hookLog); err == nil {
+		lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+		var nonEmpty []string
+		for _, l := range lines {
+			if strings.TrimSpace(l) != "" {
+				nonEmpty = append(nonEmpty, l)
+			}
+		}
+		if len(nonEmpty) > 0 {
+			latest := nonEmpty[len(nonEmpty)-1]
+			msg := fmt.Sprintf("%d hook error(s) logged, most recent: %s (full log: %s)", len(nonEmpty), latest, hookLog)
+			check("no recent hook errors", false, msg)
+		}
+	}
+
 	// 4d. defn binary available
 	defnPath := ""
 	if p, err := os.Executable(); err == nil {

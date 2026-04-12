@@ -75,6 +75,59 @@ func TestSuggestHook_ExitsCleanlyOnValidInput(t *testing.T) {
 	}
 }
 
+// TestSuggestHook_LogsMCPFailure verifies that when the plancheck binary is
+// missing (MCP call fails), the hook logs to ~/.plancheck/hook-errors.log
+// instead of failing silently. This gives plancheck doctor a way to surface
+// broken installs.
+func TestSuggestHook_LogsMCPFailure(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not available")
+	}
+
+	// Use a fake HOME so we don't pollute the real log
+	fakeHome := t.TempDir()
+
+	// Set up a fake project with .defn so the hook reaches the MCP call
+	proj := filepath.Join(fakeHome, "project")
+	if err := os.MkdirAll(filepath.Join(proj, ".defn"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write the hook with a bogus plancheck binary path
+	hookPath := filepath.Join(fakeHome, "plancheck-suggest.sh")
+	script := buildSuggestHook("/nonexistent/plancheck-binary")
+	if err := os.WriteFile(hookPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Touch two files so the hook actually makes the MCP call
+	// (the count < 2 guard needs to be satisfied)
+	runHook := func(filePath string) {
+		cmd := exec.Command("bash", hookPath)
+		cmd.Env = append(os.Environ(), "HOME="+fakeHome)
+		cmd.Stdin = strings.NewReader(`{"cwd":"` + proj + `","tool_input":{"file_path":"` + filePath + `"}}`)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("hook exited non-zero: %v\noutput: %s", err, string(out))
+		}
+	}
+	runHook(filepath.Join(proj, "a.go"))
+	runHook(filepath.Join(proj, "b.go"))
+
+	// Error log should now exist with at least one entry about the missing binary
+	logPath := filepath.Join(fakeHome, ".plancheck", "hook-errors.log")
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("expected hook error log at %s, got: %v", logPath, err)
+	}
+	if !strings.Contains(string(data), "plancheck mcp failed") {
+		t.Errorf("expected MCP failure in log, got: %s", string(data))
+	}
+}
+
 // TestSuggestHook_NoSetE ensures the hook doesn't enable set -e, which would
 // make it exit silently on any command returning non-zero. This is a guard
 // against the original bug pattern regressing.
