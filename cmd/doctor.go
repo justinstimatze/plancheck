@@ -138,6 +138,16 @@ func (c *DoctorCmd) Run() error {
 	}
 	check("PostToolUse suggest hook", hasSuggestHook, "no suggest hook — run: plancheck setup")
 
+	// 4c. Detect pre-0.1.1 broken suggest hook (set -e + ||...&& precedence bug)
+	suggestHookPath := filepath.Join(home, ".claude", "hooks", "plancheck-suggest.sh")
+	if data, err := os.ReadFile(suggestHookPath); err == nil {
+		content := string(data)
+		hasBug := strings.Contains(content, "\nset -e\n") &&
+			strings.Contains(content, "] || [") &&
+			strings.Contains(content, "] && exit 0")
+		check("suggest hook up-to-date", !hasBug, "suggest hook has the set -e bug — re-run: plancheck setup")
+	}
+
 	// 4d. defn binary available
 	defnPath := ""
 	if p, err := os.Executable(); err == nil {

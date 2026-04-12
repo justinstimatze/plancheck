@@ -194,41 +194,7 @@ exec %s gate
 	}
 
 	// Write suggest hook script (calls plancheck suggest after Go file edits)
-	suggestScript := fmt.Sprintf(`#!/bin/bash
-# PostToolUse: plancheck suggest after Go file edits. Shows MUST CHANGE only.
-set -e
-INPUT=$(cat)
-CWD=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('cwd',''))" 2>/dev/null || true)
-FILE_PATH=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('file_path',''))" 2>/dev/null || true)
-[ -z "$CWD" ] || [ -z "$FILE_PATH" ] && exit 0
-case "$FILE_PATH" in *.go) ;; *) exit 0 ;; esac
-case "$FILE_PATH" in *_test.go) exit 0 ;; esac
-[ ! -d "$CWD/.defn" ] && exit 0
-SUGGEST_DIR="${XDG_RUNTIME_DIR:-$HOME/.plancheck/tmp}"
-mkdir -p "$SUGGEST_DIR" 2>/dev/null
-chmod 700 "$SUGGEST_DIR" 2>/dev/null
-SF="$SUGGEST_DIR/suggest-$(echo "$CWD" | md5sum | cut -c1-8).txt"
-REL="${FILE_PATH#$CWD/}"
-touch "$SF" && grep -qxF "$REL" "$SF" 2>/dev/null || echo "$REL" >> "$SF"
-[ "$(wc -l < "$SF")" -lt 2 ] && exit 0
-FJ=$(python3 -c "import json; print(json.dumps([l.strip() for l in open('$SF') if l.strip()]))")
-R=$(echo "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"suggest\",\"arguments\":{\"files_touched\":$(echo "$FJ" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read().strip()))"),\"cwd\":\"$CWD\"}}}" | timeout 30 %s mcp 2>/dev/null | python3 -c "
-import json, sys
-for line in sys.stdin:
-    line = line.strip()
-    if not line: continue
-    try:
-        d = json.loads(line)
-        if 'result' in d:
-            for c in d['result'].get('content', []):
-                if c.get('type') == 'text' and 'MUST CHANGE' in c['text']:
-                    print(c['text'])
-            break
-    except: pass
-" 2>/dev/null || true)
-[ -n "$R" ] && echo "$R"
-`, binary)
-
+	suggestScript := buildSuggestHook(binary)
 	suggestPath := filepath.Join(hooksDir, "plancheck-suggest.sh")
 	if err := os.WriteFile(suggestPath, []byte(suggestScript), 0o755); err != nil {
 		return fmt.Errorf("cannot write suggest hook: %w", err)
@@ -335,6 +301,52 @@ for line in sys.stdin:
 		return err
 	}
 	return os.WriteFile(settingsJSON, append(out, '\n'), 0o600)
+}
+
+// buildSuggestHook returns the PostToolUse hook script that calls `plancheck suggest`
+// after Go file edits. Fire-and-forget: no `set -e`, always exits 0. Positive guards
+// avoid the `[ -z "$a" ] || [ -z "$b" ] && exit 0` precedence trap that silently
+// kills the script when both vars are non-empty.
+func buildSuggestHook(binary string) string {
+	return fmt.Sprintf(`#!/bin/bash
+# PostToolUse: plancheck suggest after Go file edits. Shows MUST CHANGE only.
+# Fire-and-forget: no set -e, always exits 0.
+INPUT=$(cat)
+CWD=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('cwd',''))" 2>/dev/null || true)
+FILE_PATH=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('file_path',''))" 2>/dev/null || true)
+if [ -z "$CWD" ] || [ -z "$FILE_PATH" ]; then exit 0; fi
+case "$FILE_PATH" in *.go) ;; *) exit 0 ;; esac
+case "$FILE_PATH" in *_test.go) exit 0 ;; esac
+if [ ! -d "$CWD/.defn" ]; then exit 0; fi
+SUGGEST_DIR="${XDG_RUNTIME_DIR:-$HOME/.plancheck/tmp}"
+mkdir -p "$SUGGEST_DIR" 2>/dev/null
+chmod 700 "$SUGGEST_DIR" 2>/dev/null
+SF="$SUGGEST_DIR/suggest-$(echo "$CWD" | md5sum | cut -c1-8).txt"
+REL="${FILE_PATH#$CWD/}"
+touch "$SF"
+if ! grep -qxF "$REL" "$SF" 2>/dev/null; then
+  echo "$REL" >> "$SF"
+fi
+if [ "$(wc -l < "$SF" 2>/dev/null || echo 0)" -lt 2 ]; then exit 0; fi
+FJ=$(python3 -c "import json; print(json.dumps([l.strip() for l in open('$SF') if l.strip()]))" 2>/dev/null)
+if [ -z "$FJ" ]; then exit 0; fi
+R=$(echo "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"suggest\",\"arguments\":{\"files_touched\":$(echo "$FJ" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read().strip()))"),\"cwd\":\"$CWD\"}}}" | timeout 30 %s mcp 2>/dev/null | python3 -c "
+import json, sys
+for line in sys.stdin:
+    line = line.strip()
+    if not line: continue
+    try:
+        d = json.loads(line)
+        if 'result' in d:
+            for c in d['result'].get('content', []):
+                if c.get('type') == 'text' and 'MUST CHANGE' in c['text']:
+                    print(c['text'])
+            break
+    except: pass
+" 2>/dev/null)
+if [ -n "$R" ]; then echo "$R"; fi
+exit 0
+`, binary)
 }
 
 func setupSkill(home string) error {
