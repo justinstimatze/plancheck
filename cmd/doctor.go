@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type DoctorCmd struct{}
@@ -148,19 +149,15 @@ func (c *DoctorCmd) Run() error {
 		check("suggest hook up-to-date", !hasBug, "suggest hook has the set -e bug — re-run: plancheck setup")
 	}
 
-	// 4c2. Surface recent hook failures from ~/.plancheck/hook-errors.log
+	// 4c2. Surface RECENT hook failures from ~/.plancheck/hook-errors.log.
+	// Only entries within the last 24h count — older errors are noise that
+	// the user has either seen or fixed.
 	hookLog := filepath.Join(home, ".plancheck", "hook-errors.log")
 	if data, err := os.ReadFile(hookLog); err == nil {
-		lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
-		var nonEmpty []string
-		for _, l := range lines {
-			if strings.TrimSpace(l) != "" {
-				nonEmpty = append(nonEmpty, l)
-			}
-		}
-		if len(nonEmpty) > 0 {
-			latest := nonEmpty[len(nonEmpty)-1]
-			msg := fmt.Sprintf("%d hook error(s) logged, most recent: %s (full log: %s)", len(nonEmpty), latest, hookLog)
+		recent := recentHookErrors(string(data), time.Now(), 24*time.Hour)
+		if len(recent) > 0 {
+			latest := recent[len(recent)-1]
+			msg := fmt.Sprintf("%d hook error(s) in last 24h, most recent: %s (full log: %s — rm to clear)", len(recent), latest, hookLog)
 			check("no recent hook errors", false, msg)
 		}
 	}
@@ -231,4 +228,35 @@ func (c *DoctorCmd) Run() error {
 		os.Exit(1)
 	}
 	return nil
+}
+
+// recentHookErrors parses hook-errors.log content and returns only entries
+// whose ISO-8601 timestamp is within `window` of `now`. Lines without a
+// parseable timestamp prefix are treated as old (excluded). Empty lines skipped.
+//
+// Log format: `[2026-04-11T12:00:00Z] message text`
+func recentHookErrors(logContent string, now time.Time, window time.Duration) []string {
+	cutoff := now.Add(-window)
+	var recent []string
+	for _, line := range strings.Split(strings.TrimRight(logContent, "\n"), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		// Extract `[timestamp]` prefix
+		if !strings.HasPrefix(line, "[") {
+			continue
+		}
+		end := strings.Index(line, "]")
+		if end < 0 {
+			continue
+		}
+		ts, err := time.Parse(time.RFC3339, line[1:end])
+		if err != nil {
+			continue
+		}
+		if ts.After(cutoff) || ts.Equal(cutoff) {
+			recent = append(recent, line)
+		}
+	}
+	return recent
 }
