@@ -22,11 +22,18 @@ func (c *SetupCmd) Run() error {
 
 	binary := c.Binary
 	if binary == "" {
-		binary, err = os.Executable()
-		if err != nil {
-			return fmt.Errorf("cannot determine executable path: %w", err)
+		// Prefer ~/go/bin/plancheck — stable across `go install` upgrades.
+		// Fall back to the current executable only if go/bin doesn't exist.
+		gobin := filepath.Join(home, "go", "bin", "plancheck")
+		if _, err := os.Stat(gobin); err == nil {
+			binary = gobin
+		} else {
+			binary, err = os.Executable()
+			if err != nil {
+				return fmt.Errorf("cannot determine executable path: %w", err)
+			}
+			binary, _ = filepath.Abs(binary)
 		}
-		binary, _ = filepath.Abs(binary)
 	}
 
 	var anyFailed bool
@@ -145,14 +152,18 @@ func setupMCP(home, binary string) error {
 		servers = make(map[string]interface{})
 	}
 
-	if _, exists := servers["plancheck"]; exists {
-		return nil // already configured
-	}
-
-	servers["plancheck"] = map[string]interface{}{
-		"type":    "stdio",
-		"command": binary,
-		"args":    []string{"mcp"},
+	// Update command path if stale, or create new entry
+	if pc, ok := servers["plancheck"].(map[string]interface{}); ok {
+		if cmd, _ := pc["command"].(string); cmd == binary {
+			return nil // already configured with correct path
+		}
+		pc["command"] = binary
+	} else {
+		servers["plancheck"] = map[string]interface{}{
+			"type":    "stdio",
+			"command": binary,
+			"args":    []string{"mcp"},
+		}
 	}
 	cfg["mcpServers"] = servers
 
