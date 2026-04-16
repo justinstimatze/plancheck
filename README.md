@@ -57,6 +57,13 @@ plancheck doctor       # verify everything
 - **Suggest hook** — shows compiler-verified suggestions after Go file edits
 - **Check-plan skill** — persona-based plan verification
 
+Setup writes hooks and MCP config pointing at `~/go/bin/plancheck`, the stable
+`go install` path. This means `go install github.com/justinstimatze/plancheck@latest`
+upgrades in-place — no need to re-run setup. Project-local `.mcp.json` files
+should follow the same pattern: prefer `~/go/bin/defn` and `~/go/bin/plancheck`
+over local dev build artifacts, otherwise stale binaries silently stick around
+across version bumps.
+
 ## Signal sources
 
 | Signal | Confidence | Source | Cost |
