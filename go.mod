@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	github.com/alecthomas/kong v1.14.0
-	github.com/justinstimatze/defn v0.10.3
+	github.com/justinstimatze/defn v0.11.1
 	github.com/mark3labs/mcp-go v0.44.1
 )
 
