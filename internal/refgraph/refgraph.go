@@ -1,16 +1,17 @@
 // Package refgraph bridges plancheck with defn reference graphs.
 //
 // Core graph operations use defn/graph (in-memory, O(1) lookups).
-// Raw SQL queries (QueryDefn) are kept for coupling analysis and
-// pattern search which need the bodies table.
+// Raw SQL queries (QueryDefn) use defn/db for in-process access to
+// coupling analysis and pattern search (bodies table).
 package refgraph
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
-	"github.com/justinstimatze/plancheck/internal/doltutil"
+	defndb "github.com/justinstimatze/defn/db"
 	"github.com/justinstimatze/plancheck/internal/types"
 )
 
@@ -21,18 +22,60 @@ func Available(cwd string) bool {
 	return err == nil && info.IsDir()
 }
 
-// QueryDefn runs a SQL query against the .defn/ database via the dolt CLI.
-// Used for coupling analysis and pattern search (need bodies table).
-// For structural queries, use LoadGraph() + typed methods instead.
+// dbCache caches open defn database handles per cwd.
+var (
+	dbCache   = make(map[string]*defndb.DB)
+	dbCacheMu sync.Mutex
+)
+
+// openDB returns a cached database handle for the given cwd.
+// Returns nil if .defn/ doesn't exist.
+func openDB(cwd string) *defndb.DB {
+	dbCacheMu.Lock()
+	defer dbCacheMu.Unlock()
+	if d, ok := dbCache[cwd]; ok {
+		return d
+	}
+	defnDir := filepath.Join(cwd, ".defn")
+	if info, err := os.Stat(defnDir); err != nil || !info.IsDir() {
+		return nil
+	}
+	d, err := defndb.Open(defnDir)
+	if err != nil {
+		return nil
+	}
+	dbCache[cwd] = d
+	return d
+}
+
+// CloseDBCache closes all cached database handles. Call at process exit.
+func CloseDBCache() {
+	dbCacheMu.Lock()
+	defer dbCacheMu.Unlock()
+	for k, d := range dbCache {
+		d.Close()
+		delete(dbCache, k)
+	}
+}
+
+// QueryDefn runs a SQL query against the .defn/ database using the
+// embedded Dolt engine (no subprocess). Used for coupling analysis and
+// pattern search (bodies table). For structural queries, use LoadGraph().
 func QueryDefn(cwd, sql string) []map[string]interface{} {
-	rows, _ := doltQuery(cwd, sql)
+	d := openDB(cwd)
+	if d == nil {
+		return nil
+	}
+	rows, _ := d.Query(sql)
 	return rows
 }
 
-// doltQuery runs a SQL query against the .defn/ database via the dolt CLI.
-func doltQuery(cwd, sql string) ([]map[string]interface{}, error) {
-	defnDir := filepath.Join(cwd, ".defn")
-	return doltutil.Query(defnDir, sql)
+// QueryDefnDir runs a SQL query against a .defn/ directory directly.
+// Used by simulate package which passes the defnDir path rather than cwd.
+func QueryDefnDir(defnDir, sql string) []map[string]interface{} {
+	// Strip trailing "/.defn" to get cwd for cache key
+	cwd := filepath.Dir(defnDir)
+	return QueryDefn(cwd, sql)
 }
 
 // CheckBlastRadius finds definitions in filesToModify whose callers

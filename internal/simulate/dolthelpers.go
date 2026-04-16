@@ -5,12 +5,12 @@
 // simulate.go and cascade.go use the in-memory graph instead.
 package simulate
 
-import "github.com/justinstimatze/plancheck/internal/doltutil"
+import "github.com/justinstimatze/plancheck/internal/refgraph"
 
-// doltQuery runs a SQL query against a .defn/ database via the dolt CLI.
+// doltQuery runs a SQL query against a .defn/ database using the embedded
+// Dolt engine (no subprocess).
 func doltQuery(defnDir string, sql string) []map[string]interface{} {
-	rows, _ := doltutil.Query(defnDir, sql)
-	return rows
+	return refgraph.QueryDefnDir(defnDir, sql)
 }
 
 func intVal(row map[string]interface{}, key string) int {
@@ -23,6 +23,8 @@ func intVal(row map[string]interface{}, key string) int {
 		return int(n)
 	case int:
 		return n
+	case int64:
+		return int(n)
 	default:
 		return 0
 	}
@@ -32,4 +34,3 @@ func strVal(row map[string]interface{}, key string) string {
 	v, _ := row[key].(string)
 	return v
 }
-

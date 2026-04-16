@@ -36,9 +36,8 @@ internal/
     spike.go            Spike orchestration + scoring
     buildcheck.go       go build -overlay probing
     obligations.go      Type-level obligation extraction
-  refgraph/             defn reference graph bridge
+  refgraph/             defn reference graph bridge + embedded Dolt queries
   comod/                Git co-modification analysis
-  doltutil/             Shared Dolt query utility
   types/                All shared types (no import cycles)
   history/              JSONL persistence
   signals/              Informational probes

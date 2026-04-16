@@ -30,8 +30,7 @@ Run `defn init .` in the target project. `plancheck review` and `plancheck check
 - `internal/simulate/spike.go` — spike orchestration, diff-aware scoring
 - `internal/simulate/buildcheck.go` — `go build -overlay`, blast radius probing
 - `internal/comod/` — git co-modification analysis
-- `internal/refgraph/` — defn reference graph bridge
-- `internal/doltutil/` — shared Dolt query utility
+- `internal/refgraph/` — defn reference graph bridge + embedded Dolt queries
 - `cmd/` — CLI commands + MCP handlers
 - `cmd/mcp_suggest.go` — suggest() MCP tool
 

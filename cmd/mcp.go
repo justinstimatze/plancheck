@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"runtime/debug"
 
+	"github.com/justinstimatze/plancheck/internal/refgraph"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -15,6 +17,10 @@ var validGitRef = regexp.MustCompile(`^[a-zA-Z0-9/_.\-~^]+$`)
 type MCPCmd struct{}
 
 func (c *MCPCmd) Run() error {
+	// Limit memory for the embedded Dolt engine (default caches are ~544 MB).
+	debug.SetMemoryLimit(512 << 20) // 512 MiB
+	defer refgraph.CloseDBCache()
+
 	s := server.NewMCPServer("plancheck", AppVersion)
 
 	s.AddTool(mcp.NewTool("check_plan",
