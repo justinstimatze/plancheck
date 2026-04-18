@@ -11,10 +11,10 @@
 package forecast
 
 import (
-	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
+
+	"github.com/justinstimatze/plancheck/internal/refgraph"
 )
 
 // Analogy is a similar definition found in another project.
@@ -191,18 +191,8 @@ func reposDir() string {
 }
 
 func queryDolt(defnDir, sql string) []map[string]interface{} {
-	cmd := exec.Command("dolt", "sql", "-q", sql, "-r", "json")
-	cmd.Dir = defnDir
-	cmd.Stderr = nil
-	out, err := cmd.Output()
-	if err != nil {
-		return nil
-	}
-	var r struct {
-		Rows []map[string]interface{} `json:"rows"`
-	}
-	json.Unmarshal(out, &r)
-	return r.Rows
+	// Cross-repo sweep: don't cache handles for every dataset repo.
+	return refgraph.QueryDefnOnce(defnDir, sql)
 }
 
 func strField(row map[string]interface{}, key string) string {
@@ -211,6 +201,14 @@ func strField(row map[string]interface{}, key string) string {
 }
 
 func intField(row map[string]interface{}, key string) int {
-	v, _ := row[key].(float64)
-	return int(v)
+	switch n := row[key].(type) {
+	case int64:
+		return int(n)
+	case int:
+		return n
+	case float64:
+		return int(n)
+	default:
+		return 0
+	}
 }

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/justinstimatze/plancheck/internal/refgraph"
 )
 
 type DoctorCmd struct{}
@@ -24,6 +26,16 @@ func (c *DoctorCmd) Run() error {
 		} else {
 			fmt.Printf("  ✗ %s — %s\n", name, detail)
 			ok = false
+		}
+	}
+	// warn is like check but non-blocking — prints a ⚠ advisory without
+	// flipping overall ok. Use for "needs user action" findings that
+	// aren't broken configuration (e.g. stale data).
+	warn := func(name string, pass bool, detail string) {
+		if pass {
+			fmt.Printf("  ✓ %s\n", name)
+		} else {
+			fmt.Printf("  \x1b[33m⚠\x1b[0m %s — %s\n", name, detail)
 		}
 	}
 
@@ -179,6 +191,21 @@ func (c *DoctorCmd) Run() error {
 		}
 	}
 	check("defn binary", defnPath != "", "defn not found — install: go install github.com/justinstimatze/defn@latest")
+
+	// 4e. defn graph in sync with working tree (only when doctor runs inside a defn-indexed project)
+	// Non-blocking: stale data is actionable but not a broken config — scripts checking
+	// exit status shouldn't fail on "needs re-ingest".
+	cwd, _ := os.Getwd()
+	if cwd != "" {
+		if info, err := os.Stat(filepath.Join(cwd, ".defn")); err == nil && info.IsDir() {
+			stale := refgraph.StaleFiles(cwd)
+			msg := formatStaleCount(stale)
+			if msg != "" {
+				msg += ". Run: defn ingest"
+			}
+			warn("defn graph fresh", len(stale) == 0, msg)
+		}
+	}
 
 	// 5. Skill file exists
 	skillPath := filepath.Join(home, ".claude", "skills", "check-plan", "SKILL.md")

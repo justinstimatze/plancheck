@@ -30,6 +30,8 @@ func (c *ReviewCmd) Run() error {
 		os.Exit(1)
 	}
 
+	warnIfStale(os.Stderr, absCwd)
+
 	// Determine which files have changed
 	modifiedFiles, baseRef := getModifiedGoFiles(absCwd, c.BaseRef)
 	if len(modifiedFiles) == 0 {

@@ -31,6 +31,9 @@ func (c *CheckCmd) Run() error {
 	}
 
 	absCwd, _ := filepath.Abs(c.Cwd)
+	if !c.JSON {
+		warnIfStale(os.Stderr, absCwd)
+	}
 	result := plan.Check(plan.CheckOptions{Plan: p, Cwd: absCwd})
 	history.SaveCheckResult(absCwd, result)
 

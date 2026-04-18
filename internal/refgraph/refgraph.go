@@ -6,10 +6,12 @@
 package refgraph
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	defndb "github.com/justinstimatze/defn/db"
 	"github.com/justinstimatze/plancheck/internal/types"
@@ -22,19 +24,38 @@ func Available(cwd string) bool {
 	return err == nil && info.IsDir()
 }
 
-// dbCache caches open defn database handles per cwd.
+// dbCache caches open defn database handles per cwd. pingCache records
+// the last time a cached handle was successfully pinged; within
+// pingThrottle we trust the handle and skip the round-trip.
 var (
-	dbCache   = make(map[string]*defndb.DB)
-	dbCacheMu sync.Mutex
+	dbCache      = make(map[string]*defndb.DB)
+	pingCache    = make(map[string]time.Time)
+	dbCacheMu    sync.Mutex
+	pingThrottle = 10 * time.Second
 )
 
 // openDB returns a cached database handle for the given cwd.
-// Returns nil if .defn/ doesn't exist.
+// Returns nil if .defn/ doesn't exist. Ping runs at most once per
+// pingThrottle window per handle; on failure (dolt sql-server restart,
+// GC invalidation) the handle is closed and reopened so long-running
+// MCP sessions stay resilient across server restarts.
 func openDB(cwd string) *defndb.DB {
 	dbCacheMu.Lock()
 	defer dbCacheMu.Unlock()
 	if d, ok := dbCache[cwd]; ok {
-		return d
+		if time.Since(pingCache[cwd]) < pingThrottle {
+			return d
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		err := d.Ping(ctx)
+		cancel()
+		if err == nil {
+			pingCache[cwd] = time.Now()
+			return d
+		}
+		d.Close()
+		delete(dbCache, cwd)
+		delete(pingCache, cwd)
 	}
 	defnDir := filepath.Join(cwd, ".defn")
 	if info, err := os.Stat(defnDir); err != nil || !info.IsDir() {
@@ -45,6 +66,7 @@ func openDB(cwd string) *defndb.DB {
 		return nil
 	}
 	dbCache[cwd] = d
+	pingCache[cwd] = time.Now()
 	return d
 }
 
@@ -55,7 +77,23 @@ func CloseDBCache() {
 	for k, d := range dbCache {
 		d.Close()
 		delete(dbCache, k)
+		delete(pingCache, k)
 	}
+}
+
+// StaleFiles returns .go files under cwd modified more recently than
+// the last defn ingest. Nil means either in-sync or no ingest
+// timestamp recorded (DBs created before defn added the marker).
+func StaleFiles(cwd string) []string {
+	d := openDB(cwd)
+	if d == nil {
+		return nil
+	}
+	stale, err := d.StaleFiles(cwd)
+	if err != nil {
+		return nil
+	}
+	return stale
 }
 
 // QueryDefn runs a SQL query against the .defn/ database using the
@@ -76,6 +114,24 @@ func QueryDefnDir(defnDir, sql string) []map[string]interface{} {
 	// Strip trailing "/.defn" to get cwd for cache key
 	cwd := filepath.Dir(defnDir)
 	return QueryDefn(cwd, sql)
+}
+
+// QueryDefnOnce runs a SQL query against .defn/ without touching the
+// dbCache — the handle is opened and closed per call. Intended for
+// transient cross-repo iteration (e.g. forecast/analogies scanning
+// many indexed repos in a single sweep), where caching would hold
+// live Dolt engines for every repo visited.
+func QueryDefnOnce(defnDir, sql string) []map[string]interface{} {
+	if info, err := os.Stat(defnDir); err != nil || !info.IsDir() {
+		return nil
+	}
+	d, err := defndb.Open(defnDir)
+	if err != nil {
+		return nil
+	}
+	defer d.Close()
+	rows, _ := d.Query(sql)
+	return rows
 }
 
 // CheckBlastRadius finds definitions in filesToModify whose callers

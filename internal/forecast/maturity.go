@@ -15,6 +15,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/justinstimatze/plancheck/internal/refgraph"
 )
 
 // Maturity represents where a project sits on the greenfield→mature axis.
@@ -217,46 +219,16 @@ func hasDefn(cwd string) bool {
 }
 
 func queryTestDensity(cwd string) float64 {
-	// Use dolt to query defn — reuse the simulate package's approach
-	defnDir := filepath.Join(cwd, ".defn")
-	cmd := exec.Command("dolt", "sql", "-q",
-		"SELECT COUNT(CASE WHEN test=TRUE THEN 1 END) as t, COUNT(*) as n FROM definitions",
-		"-r", "json")
-	cmd.Dir = defnDir
-	out, err := cmd.Output()
-	if err != nil {
+	rows := refgraph.QueryDefn(cwd,
+		"SELECT COUNT(CASE WHEN test=TRUE THEN 1 END) as t, COUNT(*) as n FROM definitions")
+	if len(rows) == 0 {
 		return estimateTestDensity(cwd)
 	}
-	// Parse JSON manually to avoid import cycle
-	// Look for "t":N and "n":N
-	s := string(out)
-	var t, n float64
-	for i := 0; i < len(s)-5; i++ {
-		if s[i:i+3] == "\"t\"" {
-			j := i + 4
-			for j < len(s) && (s[j] == ':' || s[j] == ' ') {
-				j++
-			}
-			for j < len(s) && s[j] >= '0' && s[j] <= '9' {
-				t = t*10 + float64(s[j]-'0')
-				j++
-			}
-		}
-		if s[i:i+3] == "\"n\"" {
-			j := i + 4
-			for j < len(s) && (s[j] == ':' || s[j] == ' ') {
-				j++
-			}
-			for j < len(s) && s[j] >= '0' && s[j] <= '9' {
-				n = n*10 + float64(s[j]-'0')
-				j++
-			}
-		}
-	}
+	t, n := intField(rows[0], "t"), intField(rows[0], "n")
 	if n == 0 {
 		return 0
 	}
-	return t / n
+	return float64(t) / float64(n)
 }
 
 func estimateTestDensity(cwd string) float64 {
