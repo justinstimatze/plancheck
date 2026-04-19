@@ -1,19 +1,38 @@
 version: 2
 
 builds:
-  - env:
-      - CGO_ENABLED=0
+  - id: plancheck
+    binary: plancheck
+    env:
+      - CGO_ENABLED=1
     goos:
       - linux
-      - darwin
     goarch:
       - amd64
-      - arm64
+    flags:
+      - -trimpath
     ldflags:
       - -s -w -X main.version={{.Version}}
 
 archives:
-  - format: tar.gz
+  - id: default
+    formats: ['tar.gz']
+    name_template: "plancheck_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: 'checksums.txt'
 
 changelog:
-  sort: asc
+  use: github
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^ci:'
+
+release:
+  github:
+    owner: justinstimatze
+    name: plancheck
+  draft: false
+  prerelease: auto
