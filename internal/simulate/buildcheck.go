@@ -133,6 +133,9 @@ func RunBuildCheck(fileBlocks map[string]string, cwd string) (*BuildCheckResult,
 			if rel, ok := tmpToRelPath[filePath]; ok {
 				filePath = rel
 			} else if rel, err := filepath.Rel(cwd, filePath); err == nil {
+				if strings.HasPrefix(rel, "..") {
+					continue // outside project root (e.g. module cache)
+				}
 				filePath = rel
 			}
 		}
@@ -367,6 +370,10 @@ func RunBlastRadius(planFiles []string, cwd string) (*BlastRadiusResult, error) 
 		filePath := m[1]
 		if filepath.IsAbs(filePath) {
 			if rel, err := filepath.Rel(cwd, filePath); err == nil {
+				if strings.HasPrefix(rel, "..") {
+					totalErrors++
+					continue // outside project root (e.g. module cache)
+				}
 				filePath = rel
 			}
 		}
