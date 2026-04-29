@@ -124,8 +124,8 @@ _Confidence tiers are estimated from benchmark observation, not formally measure
 |----------|---------|-------------|
 | `PLANCHECK_NO_SPIKE` | *(unset)* | Set to `1` to skip the LLM spike (structural signals only) |
 | `PLANCHECK_SPIKE_MODEL` | `claude-sonnet-4-6` | Model for the implementation spike |
-| `PLANCHECK_API_KEY` | *(unset)* | Anthropic API key (for spike). Falls back to `ANTHROPIC_API_KEY` |
 | `PLANCHECK_SPIKE_DEBUG` | *(unset)* | Set to `1` to print spike tool calls to stderr |
+| `PLANCHECK_JSON` | *(unset)* | Set to `1` for JSON output from `simulate` and `forecast` |
 
 ## License
 

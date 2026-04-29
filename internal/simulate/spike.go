@@ -48,7 +48,7 @@ func RunSpike(cwd string, graph *refgraph.Graph, planFiles []string,
 	}
 
 	// Agent spike: tool-using exploration (default when graph is available)
-	if graph != nil && os.Getenv("PLANCHECK_NO_AGENT") != "1" {
+	if graph != nil {
 		agentResult, err := RunAgentSpike(cwd, graph, planFiles, objective, steps, domainHints)
 		if err != nil {
 			// Agent failed — fall through to single-turn spike
@@ -174,64 +174,6 @@ func RunSpike(cwd string, graph *refgraph.Graph, planFiles []string,
 				}
 			}
 
-			// RECURSIVE SPIKE: disabled by default — doubles wall time per task
-			// (~5-8min vs ~2-3min) and most extra cost is wasted when the second
-			// spike doesn't find new depth-2 files. Enable with PLANCHECK_RECURSIVE=1
-			// for tasks where depth-2 discovery is worth the cost.
-			if os.Getenv("PLANCHECK_RECURSIVE") == "1" {
-				var expandedFiles []string
-				for _, pred := range predictions {
-					// Only recurse on implemented files (have code), not exploration-only
-					if pred.Score >= 0.70 {
-						if _, ok := agentResult.FileBlocks[pred.File]; ok {
-							expandedFiles = append(expandedFiles, pred.File)
-						}
-					}
-				}
-				if len(expandedFiles) >= 1 && len(expandedFiles) <= 3 {
-					// Second spike: expanded plan = original + discovered files
-					expandedPlan := make([]string, len(planFiles))
-					copy(expandedPlan, planFiles)
-					expandedPlan = append(expandedPlan, expandedFiles...)
-
-					secondResult, secondErr := RunAgentSpikeLightweight(
-						cwd, graph, expandedPlan, objective, steps)
-					if secondErr == nil && secondResult != nil {
-						// Merge second spike's findings at lower confidence
-						allSeen := make(map[string]bool)
-						for _, p := range predictions {
-							allSeen[p.File] = true
-						}
-						for _, pf := range planFiles {
-							allSeen[pf] = true
-						}
-						for _, af := range secondResult.Files {
-							if allSeen[af.Path] || planFileSet[af.Path] {
-								continue
-							}
-							fullPath := filepath.Join(cwd, af.Path)
-							if _, err := os.Stat(fullPath); err != nil {
-								continue
-							}
-							// Depth-2 score: 70% of the original score
-							score := af.Score * 0.70
-							predictions = append(predictions, SpikePrediction{
-								File:     af.Path,
-								Reason:   fmt.Sprintf("recursive spike: %s", af.Path),
-								Verified: true,
-								Score:    score,
-							})
-						}
-						// Merge file blocks
-						for f, code := range secondResult.FileBlocks {
-							if _, exists := agentResult.FileBlocks[f]; !exists {
-								agentResult.FileBlocks[f] = code
-							}
-						}
-					}
-				}
-			}
-
 			return &SpikeResult{
 				Predictions: predictions,
 				Obligations: obligations,
@@ -289,7 +231,7 @@ func RunSpike(cwd string, graph *refgraph.Graph, planFiles []string,
 		}
 	}
 
-	if len(newDiscoveries) > 0 && os.Getenv("PLANCHECK_NO_PASS2") != "1" {
+	if len(newDiscoveries) > 0 {
 		expanded := append([]string{}, neighborhood...)
 		seen := make(map[string]bool)
 		for _, n := range expanded {

@@ -34,9 +34,6 @@ type StubResult struct {
 
 // getAPIKey returns the API key from environment, or empty string.
 func getAPIKey() string {
-	if key := os.Getenv("PLANCHECK_API_KEY"); key != "" {
-		return key
-	}
 	return os.Getenv("ANTHROPIC_API_KEY")
 }
 
@@ -87,9 +84,6 @@ type EnsembleResult struct {
 //
 // Returns nil, nil if no API key available or ensemble disabled.
 func GenerateStubEnsemble(opts StubOptions, n int) (*EnsembleResult, error) {
-	if os.Getenv("PLANCHECK_NO_ENSEMBLE") == "1" {
-		return nil, nil
-	}
 	key := getAPIKey()
 	if key == "" {
 		return nil, nil

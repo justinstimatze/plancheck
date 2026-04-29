@@ -45,13 +45,6 @@ type AgentResult struct {
 	Cost         types.CostSummary `json:"cost"`         // API token usage
 }
 
-// RunAgentSpikeLightweight runs a reduced-turn spike for recursive discovery.
-// 2 exploration turns + 1 implementation turn (vs 4+3 for the full spike).
-func RunAgentSpikeLightweight(cwd string, graph *refgraph.Graph, planFiles []string,
-	objective string, steps []string) (*AgentResult, error) {
-	return runAgentSpike(cwd, graph, planFiles, objective, steps, nil, 2, 1)
-}
-
 // RunAgentSpike runs the tool-using agent implementation.
 // domainHints are specific directories the task mentions but the plan doesn't cover.
 func RunAgentSpike(cwd string, graph *refgraph.Graph, planFiles []string,
