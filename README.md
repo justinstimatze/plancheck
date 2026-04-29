@@ -56,6 +56,7 @@ plancheck doctor       # verify everything
 - **Gate hook** — enforces plan quality before exiting plan mode
 - **Suggest hook** — shows compiler-verified suggestions after Go file edits
 - **Check-plan skill** — persona-based plan verification
+- **Git pre-commit hook** — runs `go vet`, short tests, and `plancheck review` before each commit
 
 Setup writes hooks and MCP config pointing at `~/go/bin/plancheck`, the stable
 `go install` path. This means `go install github.com/justinstimatze/plancheck@latest`
@@ -107,9 +108,15 @@ _Confidence tiers are estimated from benchmark observation, not formally measure
 |---------|-------------|
 | `plancheck check <plan.json>` | Full plan verification (spike + structural) |
 | `plancheck review [base_ref]` | Review git changes for missing files |
+| `plancheck simulate [cwd] <mutation>...` | Simulate mutations against the reference graph (forward, cascade, backward-scout, replay modes) |
+| `plancheck forecast <plan.json>` | Monte Carlo outcome forecast for a plan |
+| `plancheck history` | Show recent plan check history for a project |
+| `plancheck stats` | Aggregate stats across all projects |
+| `plancheck outcome` | Record the outcome of a checked plan |
+| `plancheck reflection` | Record a post-execution reflection |
 | `plancheck setup` | Configure Claude Code integration |
 | `plancheck doctor` | Verify configuration |
-| `plancheck simulate` | Run mutations against reference graph |
+| `plancheck disable` / `enable` | Globally disable or re-enable the gate hook |
 
 ## Configuration
 
