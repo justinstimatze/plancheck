@@ -3,7 +3,7 @@ module github.com/justinstimatze/plancheck
 go 1.26.2
 
 require (
-	github.com/alecthomas/kong v1.14.0
+	github.com/alecthomas/kong v1.15.0
 	github.com/justinstimatze/defn v0.19.0
 	github.com/mark3labs/mcp-go v0.44.1
 )
