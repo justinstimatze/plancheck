@@ -2,6 +2,7 @@ package plan
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -68,6 +69,34 @@ func TestSingularize(t *testing.T) {
 		got := singularize(tt.input)
 		if got != tt.want {
 			t.Errorf("singularize(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+// A directory matching a task keyword but holding only non-source artifacts
+// (e.g. PNG snapshots under cells/) is not a coverage gap.
+func TestMatchKeywordsToDirs_SkipsNonSourceDir(t *testing.T) {
+	cwd := t.TempDir()
+	os.MkdirAll(filepath.Join(cwd, "themes"), 0o755)
+	os.MkdirAll(filepath.Join(cwd, "cells"), 0o755)
+	os.WriteFile(filepath.Join(cwd, "themes", "theme.go"), []byte("package themes\n"), 0o644)
+	// cells/ holds only snapshot artifacts — no source to add.
+	os.WriteFile(filepath.Join(cwd, "cells", "cell-0005.png"), []byte("PNG"), 0o644)
+
+	planFiles := []string{"themes/theme.go"}
+	gaps, ranked := matchKeywordsToDirs(
+		"Update themes and cells layout",
+		[]string{"adjust the layout"},
+		planFiles, cwd,
+	)
+	for _, g := range gaps {
+		if g.Dir == "cells" {
+			t.Errorf("expected no gap for cells/ (no source files), got gap: %+v", g)
+		}
+	}
+	for _, r := range ranked {
+		if strings.Contains(r.Path, "cells") {
+			t.Errorf("expected no ranked file from cells/, got: %+v", r)
 		}
 	}
 }

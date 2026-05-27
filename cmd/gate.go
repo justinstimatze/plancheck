@@ -136,9 +136,20 @@ func evaluateGate(cwd, stateFile string) gateDecision {
 		return gateDecision{Allow: true}
 	}
 
+	// Greenfield / high-novelty: the reference graph has nothing to predict
+	// (Novelty.Score >= 0.7 is the "structural prediction unavailable" band).
+	// Deterministic findings (missing files, import chain) still gate, but extra
+	// verification ROUNDS surface no new structural signal — so don't let novelty
+	// inflate the round count, and don't reset the count on plan edits (which
+	// would punish the agent for improving the plan). See
+	// docs/feedback-2026-05-26-greenfield-gate-loop.md.
+	greenfield := result.Novelty != nil && result.Novelty.Score >= 0.7
+
 	// Detect plan rewrites: if the plan hash changed since the last check,
-	// reset iteration state so stale findings don't block the new plan.
-	if result.PlanHash != "" && state.PlanHash != "" && result.PlanHash != state.PlanHash {
+	// reset iteration state so stale findings don't block the new plan. On a
+	// greenfield repo this reset is harmful — findings are recomputed fresh each
+	// check, so resetting only re-runs the round count and rewards NOT refining.
+	if !greenfield && result.PlanHash != "" && state.PlanHash != "" && result.PlanHash != state.PlanHash {
 		state.ChecksSeen = nil
 		state.Complexity = 0
 	}
@@ -191,21 +202,34 @@ func evaluateGate(cwd, stateFile string) gateDecision {
 	// Adjust required checks based on forecast risk and novelty
 	required := requiredChecks(state.Complexity)
 
-	// High-risk forecast → require extra round
-	if result.Forecast != nil && result.Forecast.PFailed > 0.4 && required < 4 {
-		required++
-	}
+	if greenfield {
+		// Cap at 2 and skip risk/novelty bumps: on a novel repo more rounds add
+		// no structural signal. Two checks = one substantive pass + one confirm.
+		if required > 2 {
+			required = 2
+		}
+	} else {
+		// High-risk forecast → require extra round
+		if result.Forecast != nil && result.Forecast.PFailed > 0.4 && required < 4 {
+			required++
+		}
 
-	// High novelty → require extra round (more unknowns to verify)
-	if result.Novelty != nil && result.Novelty.Score > 0.5 && required < 4 {
-		required++
+		// High novelty → require extra round (more unknowns to verify)
+		if result.Novelty != nil && result.Novelty.Score > 0.5 && required < 4 {
+			required++
+		}
 	}
 
 	checksCompleted := len(state.ChecksSeen)
 
 	if checksCompleted < required {
 		saveGateState(stateFile, state)
-		msg := phaseMessage(checksCompleted, required, state.Complexity)
+		var msg string
+		if greenfield {
+			msg = greenfieldMessage(checksCompleted, required)
+		} else {
+			msg = phaseMessage(checksCompleted, required, state.Complexity)
+		}
 
 		// Add comod gap context on first block only
 		if len(highConfUnacked) > 0 && checksCompleted <= 1 {
@@ -228,8 +252,10 @@ func evaluateGate(cwd, stateFile string) gateDecision {
 				result.Forecast.PFailed*100, result.Forecast.BasedOn, result.Forecast.Summary)
 		}
 
-		// Add novelty context
-		if result.Novelty != nil && result.Novelty.Score > 0.4 {
+		// Add novelty context (skipped on greenfield: greenfieldMessage already
+		// explains the regime, and the stock "subdivide and re-forecast" guidance
+		// would contradict the "edits won't reset" release condition).
+		if !greenfield && result.Novelty != nil && result.Novelty.Score > 0.4 {
 			msg += fmt.Sprintf("\n\nNovelty: %s (%s). %s",
 				result.Novelty.Label, result.Novelty.Uncertainty, result.Novelty.Guidance)
 		}
@@ -245,6 +271,20 @@ func evaluateGate(cwd, stateFile string) gateDecision {
 
 	// Enough checks completed — allow
 	return gateDecision{Allow: true}
+}
+
+// greenfieldMessage explains the release condition on a novel repo where
+// structural prediction is unavailable, so the agent doesn't fight a counter it
+// can't satisfy by adding signal that doesn't exist. The count does not reset on
+// plan edits, so the message says so explicitly.
+func greenfieldMessage(checksCompleted, required int) string {
+	remaining := required - checksCompleted
+	return fmt.Sprintf(
+		"BLOCKED: novel work — structural prediction unavailable (mostly new code the reference graph can't predict). "+
+			"%d more check(s) to confirm convergence; editing the plan will NOT reset this count. "+
+			"Trace forward from the current state and backward from the goal, fix any disagreements, then re-run check_plan. "+
+			"Release condition: zero missing-file findings + %d checks.",
+		remaining, required)
 }
 
 // phaseMessage returns the appropriate block message for the current verification phase.

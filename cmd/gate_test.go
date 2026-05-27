@@ -347,6 +347,65 @@ func TestGate_PlanRewrite_ResetsState(t *testing.T) {
 	}
 }
 
+// greenfieldPlanResult is a high-novelty result (structural prediction
+// unavailable): a 13-file plan that would otherwise demand 3 checks + a novelty
+// bump under the regular regime.
+func greenfieldPlanResult(planHash string) types.PlanCheckResult {
+	return types.PlanCheckResult{
+		PlanHash:  planHash,
+		PlanStats: types.PlanStats{Steps: 13, FilesToModify: 4, FilesToCreate: 9},
+		Novelty:   &types.NoveltySummary{Score: 0.8, Label: "exploratory", Uncertainty: "very wide"},
+	}
+}
+
+func TestGate_Greenfield_AllowsAfterTwoChecks(t *testing.T) {
+	projectDir, stateFile := setupGateTest(t)
+
+	writeCheckID(t, projectDir, "check-1")
+	writeCheckResult(t, projectDir, greenfieldPlanResult("plan-a"))
+	d := evaluateGate("/fake/cwd", stateFile) // 1 — block
+	if d.Allow {
+		t.Fatal("expected block after first greenfield check")
+	}
+
+	writeCheckID(t, projectDir, "check-2")
+	d = evaluateGate("/fake/cwd", stateFile) // 2 — allow (capped at 2, no novelty bump)
+	if !d.Allow {
+		t.Fatalf("expected allow after 2 greenfield checks (capped, no novelty bump), got: %s", d.Message)
+	}
+}
+
+func TestGate_Greenfield_EditsDontResetCounter(t *testing.T) {
+	projectDir, stateFile := setupGateTest(t)
+
+	writeCheckID(t, projectDir, "check-1")
+	writeCheckResult(t, projectDir, greenfieldPlanResult("plan-a"))
+	evaluateGate("/fake/cwd", stateFile) // 1 — block, records plan-a
+
+	// Plan is improved (new hash) and re-checked. On greenfield this must NOT
+	// reset the round counter — refining the plan should not prolong the gate.
+	writeCheckID(t, projectDir, "check-2")
+	writeCheckResult(t, projectDir, greenfieldPlanResult("plan-b"))
+	d := evaluateGate("/fake/cwd", stateFile) // 2 — allow despite the edit
+	if !d.Allow {
+		t.Fatalf("expected allow — greenfield plan edits must not reset the counter, got: %s", d.Message)
+	}
+}
+
+func TestGate_Greenfield_MessageExplainsNoReset(t *testing.T) {
+	projectDir, stateFile := setupGateTest(t)
+
+	writeCheckID(t, projectDir, "check-1")
+	writeCheckResult(t, projectDir, greenfieldPlanResult("plan-a"))
+	d := evaluateGate("/fake/cwd", stateFile)
+	if d.Allow {
+		t.Fatal("expected block on first greenfield check")
+	}
+	if !strings.Contains(d.Message, "novel work") || !strings.Contains(d.Message, "NOT reset") {
+		t.Errorf("expected greenfield message explaining the no-reset release condition, got: %s", d.Message)
+	}
+}
+
 func TestRequiredChecks(t *testing.T) {
 	tests := []struct {
 		complexity int

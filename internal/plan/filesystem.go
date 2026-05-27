@@ -70,8 +70,8 @@ func findParentRegistrations(p types.ExecutionPlan, cwd string) []dirSibling {
 		}
 
 		parentDir := filepath.Dir(dir)
-		if parentDir == dir || parentDir == cwd {
-			continue // already at root
+		if parentDir == dir || !isStrictSubdir(parentDir, cwd) {
+			continue // at or above the project root
 		}
 
 		entries, err := os.ReadDir(parentDir)
@@ -122,7 +122,7 @@ func findAncestorScope(p types.ExecutionPlan, cwd string) ([]peerFile, string) {
 		}
 
 		featureRoot := filepath.Dir(dir)
-		if featureRoot == dir || featureRoot == cwd {
+		if featureRoot == dir || !isStrictSubdir(featureRoot, cwd) {
 			continue
 		}
 
@@ -192,6 +192,19 @@ func findAncestorScope(p types.ExecutionPlan, cwd string) ([]peerFile, string) {
 	}
 
 	return result, scopeSignal
+}
+
+// isStrictSubdir reports whether dir is a proper descendant of root.
+// Peer/parent scanning uses it to stay inside the project: a plan file at the
+// repo root would otherwise make featureRoot == filepath.Dir(cwd), letting the
+// scan escape into sibling projects (e.g. a Python repo pulling in .go files
+// from neighboring Go repos under the same parent directory).
+func isStrictSubdir(dir, root string) bool {
+	rel, err := filepath.Rel(root, dir)
+	if err != nil || rel == "." {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func isGreenfield(cwd string, filesToCreate []string) bool {

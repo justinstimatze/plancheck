@@ -349,13 +349,22 @@ func matchKeywordsToDirs(objective string, steps []string, planFiles []string, c
 			}
 		}
 
-		gaps = append(gaps, keywordDirGap{Keyword: m.token, Dir: m.dir, CoveredDir: peerDir})
-
 		// List .go files in uncovered directory + immediate subdirs, capped.
 		// Prefer files with names matching other task tokens or mirroring
 		// the subpath structure of covered plan files.
 		goFiles := listGoFilesShallow(filepath.Join(cwd, m.dir))
 		scored := scoreFileRelevance(goFiles, tokenSet, planFiles, peerDir)
+
+		// Only report a gap when the directory holds source files to add.
+		// A directory of non-source artifacts (e.g. PNG snapshots under
+		// cells/) is not a coverage gap, and in non-Go projects this drops
+		// keyword-dir matches that have no actionable Go files behind them.
+		if len(scored) == 0 {
+			continue
+		}
+
+		gaps = append(gaps, keywordDirGap{Keyword: m.token, Dir: m.dir, CoveredDir: peerDir})
+
 		cap := 3
 		if len(scored) < cap {
 			cap = len(scored)
