@@ -6,7 +6,7 @@
 // radius, novelty, invariants, semantic validation) and produces a
 // coherent, task-specific recommendation.
 //
-// The judge is optional — requires PLANCHECK_API_KEY. Without it,
+// The judge is optional — requires ANTHROPIC_API_KEY. Without it,
 // the deterministic summary (Minto pyramid) is used instead.
 package simulate
 
