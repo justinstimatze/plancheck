@@ -406,6 +406,75 @@ func TestGate_Greenfield_MessageExplainsNoReset(t *testing.T) {
 	}
 }
 
+// novelPlanResult is a mid-novelty result (0.5 ≤ score < 0.7, the "novel" band):
+// mostly-new code in an existing repo. Same 13-file shape as the greenfield
+// helper, so it would demand 3 checks under requiredChecks before the cap. This
+// is the band that previously got the novelty bump AND the plan-hash reset — the
+// convergence treadmill reported in docs/feedback-2026-05-28-novel-band-gate-loop.md.
+func novelPlanResult(planHash string) types.PlanCheckResult {
+	return types.PlanCheckResult{
+		PlanHash:  planHash,
+		PlanStats: types.PlanStats{Steps: 13, FilesToModify: 4, FilesToCreate: 9},
+		Novelty:   &types.NoveltySummary{Score: 0.6, Label: "novel", Uncertainty: "wide"},
+	}
+}
+
+func TestGate_NovelBand_AllowsAfterTwoChecks(t *testing.T) {
+	projectDir, stateFile := setupGateTest(t)
+
+	writeCheckID(t, projectDir, "check-1")
+	writeCheckResult(t, projectDir, novelPlanResult("plan-a"))
+	d := evaluateGate("/fake/cwd", stateFile) // 1 — block
+	if d.Allow {
+		t.Fatal("expected block after first novel check")
+	}
+
+	writeCheckID(t, projectDir, "check-2")
+	d = evaluateGate("/fake/cwd", stateFile) // 2 — allow (capped at 2, no novelty bump)
+	if !d.Allow {
+		t.Fatalf("expected allow after 2 novel-band checks (capped, no bump), got: %s", d.Message)
+	}
+}
+
+func TestGate_NovelBand_EditsDontResetCounter(t *testing.T) {
+	projectDir, stateFile := setupGateTest(t)
+
+	writeCheckID(t, projectDir, "check-1")
+	writeCheckResult(t, projectDir, novelPlanResult("plan-a"))
+	evaluateGate("/fake/cwd", stateFile) // 1 — block, records plan-a
+
+	// Plan is improved (new hash) and re-checked. In the 0.5–0.7 novel band this
+	// must NOT reset the round counter — that was the reported treadmill.
+	writeCheckID(t, projectDir, "check-2")
+	writeCheckResult(t, projectDir, novelPlanResult("plan-b"))
+	d := evaluateGate("/fake/cwd", stateFile) // 2 — allow despite the edit
+	if !d.Allow {
+		t.Fatalf("expected allow — novel-band plan edits must not reset the counter, got: %s", d.Message)
+	}
+}
+
+func TestGate_NovelBand_MessageUsesSofterWording(t *testing.T) {
+	projectDir, stateFile := setupGateTest(t)
+
+	writeCheckID(t, projectDir, "check-1")
+	writeCheckResult(t, projectDir, novelPlanResult("plan-a"))
+	d := evaluateGate("/fake/cwd", stateFile)
+	if d.Allow {
+		t.Fatal("expected block on first novel check")
+	}
+	if !strings.Contains(d.Message, "novel work") || !strings.Contains(d.Message, "NOT reset") {
+		t.Errorf("expected novel-band message explaining the no-reset release condition, got: %s", d.Message)
+	}
+	// The 0.5–0.7 band gets the softer "partially covers" wording, not the
+	// exploratory ">= 0.7" claim that prediction is fully unavailable.
+	if strings.Contains(d.Message, "prediction unavailable") {
+		t.Errorf("expected softer wording in the novel band (not 'prediction unavailable'), got: %s", d.Message)
+	}
+	if !strings.Contains(d.Message, "partially covers") {
+		t.Errorf("expected 'partially covers' wording in the novel band, got: %s", d.Message)
+	}
+}
+
 func TestRequiredChecks(t *testing.T) {
 	tests := []struct {
 		complexity int

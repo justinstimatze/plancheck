@@ -136,20 +136,28 @@ func evaluateGate(cwd, stateFile string) gateDecision {
 		return gateDecision{Allow: true}
 	}
 
-	// Greenfield / high-novelty: the reference graph has nothing to predict
-	// (Novelty.Score >= 0.7 is the "structural prediction unavailable" band).
-	// Deterministic findings (missing files, import chain) still gate, but extra
-	// verification ROUNDS surface no new structural signal — so don't let novelty
-	// inflate the round count, and don't reset the count on plan edits (which
-	// would punish the agent for improving the plan). See
-	// docs/feedback-2026-05-26-greenfield-gate-loop.md.
-	greenfield := result.Novelty != nil && result.Novelty.Score >= 0.7
+	// Novel work: novelty high enough (>= 0.5, the point where epistemic
+	// uncertainty becomes "wide") that re-running the structural probes surfaces
+	// no new signal — the reference graph has little to predict for mostly-new
+	// code. In this regime extra verification ROUNDS and counter resets only spin
+	// the agent, so we don't let novelty inflate the round count and don't reset
+	// the count on plan edits (which would punish the agent for improving the
+	// plan). This single threshold replaces the old split where the novelty bump
+	// fired at 0.5 but the protections only kicked in at 0.7, leaving the 0.5–0.7
+	// band with the bump AND the reset — a convergence treadmill. See
+	// docs/feedback-2026-05-26-greenfield-gate-loop.md and
+	// docs/feedback-2026-05-28-novel-band-gate-loop.md.
+	novel := result.Novelty != nil && result.Novelty.Score >= 0.5
+	// exploratory: almost entirely new (>= 0.7). Same gate behavior as novel;
+	// only the block-message wording is stronger ("prediction unavailable").
+	exploratory := result.Novelty != nil && result.Novelty.Score >= 0.7
 
-	// Detect plan rewrites: if the plan hash changed since the last check,
-	// reset iteration state so stale findings don't block the new plan. On a
-	// greenfield repo this reset is harmful — findings are recomputed fresh each
-	// check, so resetting only re-runs the round count and rewards NOT refining.
-	if !greenfield && result.PlanHash != "" && state.PlanHash != "" && result.PlanHash != state.PlanHash {
+	// Detect plan rewrites: if the plan hash (objective + file set) changed since
+	// the last check, reset iteration state so stale findings don't block the new
+	// plan. On novel work this reset is harmful — findings are recomputed fresh
+	// each check, so resetting only re-runs the round count and rewards NOT
+	// refining.
+	if !novel && result.PlanHash != "" && state.PlanHash != "" && result.PlanHash != state.PlanHash {
 		state.ChecksSeen = nil
 		state.Complexity = 0
 	}
@@ -202,20 +210,18 @@ func evaluateGate(cwd, stateFile string) gateDecision {
 	// Adjust required checks based on forecast risk and novelty
 	required := requiredChecks(state.Complexity)
 
-	if greenfield {
-		// Cap at 2 and skip risk/novelty bumps: on a novel repo more rounds add
-		// no structural signal. Two checks = one substantive pass + one confirm.
+	if novel {
+		// Cap at 2 and skip the forecast/novelty bumps: on novel work more rounds
+		// add no structural signal (the reference graph can't predict mostly-new
+		// code). Two checks = one substantive pass + one confirm. Novelty therefore
+		// never INCREASES the round count — it only caps it; the old novelty bump
+		// is removed entirely (it only ever fired in this same >= 0.5 band).
 		if required > 2 {
 			required = 2
 		}
 	} else {
 		// High-risk forecast → require extra round
 		if result.Forecast != nil && result.Forecast.PFailed > 0.4 && required < 4 {
-			required++
-		}
-
-		// High novelty → require extra round (more unknowns to verify)
-		if result.Novelty != nil && result.Novelty.Score > 0.5 && required < 4 {
 			required++
 		}
 	}
@@ -225,15 +231,15 @@ func evaluateGate(cwd, stateFile string) gateDecision {
 	if checksCompleted < required {
 		saveGateState(stateFile, state)
 		var msg string
-		if greenfield {
-			msg = greenfieldMessage(checksCompleted, required)
+		if novel {
+			msg = noveltyBlockedMessage(checksCompleted, required, exploratory)
 		} else {
 			msg = phaseMessage(checksCompleted, required, state.Complexity)
 		}
 
 		// Add comod gap context on first block only
 		if len(highConfUnacked) > 0 && checksCompleted <= 1 {
-			msg += fmt.Sprintf("\n\nCo-mod: %d high-confidence gap(s) — review these and either add to filesToModify or acknowledge in acknowledgedComod:", len(highConfUnacked))
+			msg += fmt.Sprintf("\n\nCo-mod: %d high-confidence gap(s) — review each and either add it to filesToModify or, if it's genuinely unrelated, acknowledge it by adding an \"acknowledgedComod\" map entry (file → reason) to your plan JSON:", len(highConfUnacked))
 			shown := highConfUnacked
 			if len(shown) > 5 {
 				shown = shown[:5]
@@ -252,10 +258,10 @@ func evaluateGate(cwd, stateFile string) gateDecision {
 				result.Forecast.PFailed*100, result.Forecast.BasedOn, result.Forecast.Summary)
 		}
 
-		// Add novelty context (skipped on greenfield: greenfieldMessage already
+		// Add novelty context (skipped on novel work: noveltyBlockedMessage already
 		// explains the regime, and the stock "subdivide and re-forecast" guidance
 		// would contradict the "edits won't reset" release condition).
-		if !greenfield && result.Novelty != nil && result.Novelty.Score > 0.4 {
+		if !novel && result.Novelty != nil && result.Novelty.Score > 0.4 {
 			msg += fmt.Sprintf("\n\nNovelty: %s (%s). %s",
 				result.Novelty.Label, result.Novelty.Uncertainty, result.Novelty.Guidance)
 		}
@@ -273,18 +279,24 @@ func evaluateGate(cwd, stateFile string) gateDecision {
 	return gateDecision{Allow: true}
 }
 
-// greenfieldMessage explains the release condition on a novel repo where
-// structural prediction is unavailable, so the agent doesn't fight a counter it
-// can't satisfy by adding signal that doesn't exist. The count does not reset on
-// plan edits, so the message says so explicitly.
-func greenfieldMessage(checksCompleted, required int) string {
+// noveltyBlockedMessage explains the release condition on novel work where the
+// reference graph has little to predict, so the agent doesn't fight a counter it
+// can't satisfy by adding structural signal that doesn't exist. The count does
+// not reset on plan edits, so the message says so explicitly. exploratory uses
+// stronger wording (>= 0.7: prediction unavailable) than the 0.5–0.7 novel band
+// (prediction only partial).
+func noveltyBlockedMessage(checksCompleted, required int, exploratory bool) string {
 	remaining := required - checksCompleted
+	regime := "novel work — the reference graph only partially covers this (mostly new code)"
+	if exploratory {
+		regime = "novel work — structural prediction unavailable (almost entirely new code the reference graph can't predict)"
+	}
 	return fmt.Sprintf(
-		"BLOCKED: novel work — structural prediction unavailable (mostly new code the reference graph can't predict). "+
+		"BLOCKED: %s. "+
 			"%d more check(s) to confirm convergence; editing the plan will NOT reset this count. "+
 			"Trace forward from the current state and backward from the goal, fix any disagreements, then re-run check_plan. "+
 			"Release condition: zero missing-file findings + %d checks.",
-		remaining, required)
+		regime, remaining, required)
 }
 
 // phaseMessage returns the appropriate block message for the current verification phase.
@@ -297,7 +309,8 @@ func phaseMessage(checksCompleted, required, complexity int) string {
 			return fmt.Sprintf(
 				"BLOCKED: verify the plan (%d steps/files — %d verification rounds remaining). "+
 					"Trace it forward from current state and backward from the goal. "+
-					"Compare where they meet — fix any disagreements. Then re-run check_plan.",
+					"Compare where they meet — fix any disagreements. Then re-run check_plan. "+
+					"(Changing the objective or file set resets this count; wording/step edits don't. If the plan is final, re-run check_plan as-is to confirm.)",
 				complexity, remaining)
 		}
 		return "BLOCKED: verify the plan before exiting. " +
