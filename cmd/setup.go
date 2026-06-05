@@ -211,6 +211,14 @@ exec %s gate
 		return fmt.Errorf("cannot write suggest hook: %w", err)
 	}
 
+	// Write reflect-nudge hook script (PostToolUse:Bash — nudge after git commit
+	// in a plancheck'd project when the latest check has no recorded outcome).
+	nudgeScript := buildNudgeHook(binary)
+	nudgePath := filepath.Join(hooksDir, "plancheck-reflect-nudge.sh")
+	if err := os.WriteFile(nudgePath, []byte(nudgeScript), 0o755); err != nil {
+		return fmt.Errorf("cannot write reflect-nudge hook: %w", err)
+	}
+
 	// Clean up old mark hook if it exists
 	oldMarkPath := filepath.Join(hooksDir, "plancheck-mark.sh")
 	_ = os.Remove(oldMarkPath)
@@ -301,6 +309,53 @@ exec %s gate
 		}
 	}
 
+	// PostToolUse:Bash — reflect-nudge after git commit
+	hasNudge := false
+	for _, h := range filteredPost {
+		if hm, ok := h.(map[string]interface{}); ok {
+			if m, _ := hm["matcher"].(string); m == "Bash" {
+				if innerHooks, ok := hm["hooks"].([]interface{}); ok {
+					for _, ih := range innerHooks {
+						if ihm, ok := ih.(map[string]interface{}); ok {
+							if cmd, _ := ihm["command"].(string); cmd == nudgePath {
+								hasNudge = true
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	if !hasNudge {
+		found := false
+		for i, h := range filteredPost {
+			if hm, ok := h.(map[string]interface{}); ok {
+				if m, _ := hm["matcher"].(string); m == "Bash" {
+					innerHooks, _ := hm["hooks"].([]interface{})
+					innerHooks = append(innerHooks, map[string]interface{}{
+						"type":    "command",
+						"command": nudgePath,
+					})
+					hm["hooks"] = innerHooks
+					filteredPost[i] = hm
+					found = true
+					break
+				}
+			}
+		}
+		if !found {
+			filteredPost = append(filteredPost, map[string]interface{}{
+				"matcher": "Bash",
+				"hooks": []interface{}{
+					map[string]interface{}{
+						"type":    "command",
+						"command": nudgePath,
+					},
+				},
+			})
+		}
+	}
+
 	if len(filteredPost) > 0 {
 		hooks["PostToolUse"] = filteredPost
 	}
@@ -312,6 +367,25 @@ exec %s gate
 		return err
 	}
 	return os.WriteFile(settingsJSON, append(out, '\n'), 0o600)
+}
+
+// buildNudgeHook returns the PostToolUse:Bash hook script that nudges Claude
+// to record an outcome after a git commit in a plancheck'd project. Bash-side
+// short-circuit: if the JSON payload doesn't contain "commit" anywhere, skip
+// the Go invocation. The hook runs on every Bash tool call, so most
+// invocations (ls, cat, etc.) should not pay Go cold-start cost. The Go
+// binary still does precise regex filtering for the hits — the bash check
+// is only a cheap pre-filter.
+func buildNudgeHook(binary string) string {
+	return fmt.Sprintf(`#!/bin/bash
+# PostToolUse: fires after Bash. Pre-filters in shell for perf, hands the
+# JSON to plancheck for precise filtering and the silent/emit decision.
+INPUT=$(cat)
+case "$INPUT" in
+  *commit*) printf '%%s' "$INPUT" | %s reflect-nudge ;;
+esac
+exit 0
+`, binary)
 }
 
 // buildSuggestHook returns the PostToolUse hook script that calls `plancheck suggest`

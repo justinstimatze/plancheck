@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -152,5 +153,69 @@ func TestSuggestHook_NoSetE(t *testing.T) {
 				t.Errorf("suggest hook contains `||...&&` anti-pattern: %s", line)
 			}
 		}
+	}
+}
+
+// TestNudgeHook_ShortCircuitsOnNonCommit verifies the bash-side pre-filter:
+// payloads without the substring "commit" must exit 0 silently without
+// invoking the (here intentionally bogus) plancheck binary. This is the
+// optimization that keeps non-commit Bash calls (ls, cat, etc.) from paying
+// Go cold start; if the short-circuit regressed, every Bash call would pay.
+func TestNudgeHook_ShortCircuitsOnNonCommit(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+
+	tmp := t.TempDir()
+	hookPath := filepath.Join(tmp, "plancheck-reflect-nudge.sh")
+	// Bogus binary path — if the short-circuit fails we'd get an exec error
+	// and a non-zero exit. Hook must NOT execute the binary on non-commit
+	// payloads.
+	script := buildNudgeHook("/nonexistent/plancheck-binary")
+	if err := os.WriteFile(hookPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name    string
+		payload string
+		// If short-circuit fires we expect zero exec attempts; the script
+		// exits 0 cleanly. If the short-circuit MISSES, bash tries to exec
+		// the bogus binary and shell reports "no such file" on stderr with
+		// the binary pipeline non-zero. Both cases now exit 0 overall
+		// because the case statement's pipeline failure doesn't propagate
+		// without pipefail.
+		wantShortCircuit bool
+	}{
+		{"ls invocation", `{"cwd":"/x","tool_input":{"command":"ls -la"}}`, true},
+		{"cat invocation", `{"cwd":"/x","tool_input":{"command":"cat foo.txt"}}`, true},
+		{"git status", `{"cwd":"/x","tool_input":{"command":"git status"}}`, true},
+		{"git log", `{"cwd":"/x","tool_input":{"command":"git log -1"}}`, true},
+		{"echo with commit word", `{"cwd":"/x","tool_input":{"command":"echo committed"}}`, false},
+		{"git commit", `{"cwd":"/x","tool_input":{"command":"git commit -m x"}}`, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := exec.Command("bash", hookPath)
+			cmd.Stdin = strings.NewReader(tt.payload)
+			var stderr bytes.Buffer
+			cmd.Stderr = &stderr
+			err := cmd.Run()
+			if err != nil {
+				t.Fatalf("hook exited non-zero: %v\nstderr: %s", err, stderr.String())
+			}
+			// Short-circuit assertion: when the input has no "commit"
+			// substring, bash never attempts to exec the bogus binary, so
+			// stderr stays clean.
+			hadExecError := strings.Contains(stderr.String(), "No such file") ||
+				strings.Contains(stderr.String(), "not found") ||
+				strings.Contains(stderr.String(), "nonexistent")
+			if tt.wantShortCircuit && hadExecError {
+				t.Errorf("non-commit payload reached the binary (stderr: %s)", stderr.String())
+			}
+			if !tt.wantShortCircuit && !hadExecError {
+				t.Errorf("commit-bearing payload was short-circuited (expected binary attempt) stderr: %s", stderr.String())
+			}
+		})
 	}
 }
