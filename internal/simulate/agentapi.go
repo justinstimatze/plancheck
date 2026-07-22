@@ -12,10 +12,28 @@ import (
 
 // --- Claude API types for tool use ---
 
+// ephemeralCache is the cache_control marker value for the 5-minute cache tier.
+// Anthropic caches everything in the request up to (and including) any content
+// element carrying this marker; later requests with the same prefix pay ~10%
+// input cost on the cached portion. Mark it on the last static element (the
+// last tool) and the last message-content element being sent each turn.
+var ephemeralCache = &cacheControl{Type: "ephemeral"}
+
+type cacheControl struct {
+	Type string `json:"type"`
+}
+
 type agentTool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	InputSchema map[string]interface{} `json:"input_schema"`
+	Name         string                 `json:"name"`
+	Description  string                 `json:"description"`
+	InputSchema  map[string]interface{} `json:"input_schema"`
+	CacheControl *cacheControl          `json:"cache_control,omitempty"`
+}
+
+type systemBlock struct {
+	Type         string        `json:"type"`
+	Text         string        `json:"text"`
+	CacheControl *cacheControl `json:"cache_control,omitempty"`
 }
 
 type agentMessage struct {
@@ -29,7 +47,7 @@ type agentMessage struct {
 type agentAPIRequest struct {
 	Model     string                   `json:"model"`
 	MaxTokens int                      `json:"max_tokens"`
-	System    string                   `json:"system,omitempty"`
+	System    []systemBlock            `json:"system,omitempty"`
 	Messages  []map[string]interface{} `json:"messages"`
 	Tools     []agentTool              `json:"tools,omitempty"`
 }
@@ -47,6 +65,29 @@ type contentBlock struct {
 	ID    string                 `json:"id,omitempty"`
 	Name  string                 `json:"name,omitempty"`
 	Input map[string]interface{} `json:"input,omitempty"`
+}
+
+// markLastMessageCacheable attaches ephemeral cache_control to the final
+// content element of the final message in msgs. Anthropic caches everything
+// in the request up to and including this element. String content is upgraded
+// to a text block; a tool_result list gets the marker on its last entry.
+// Raw assistant content is left alone (assistant messages are always followed
+// by a user message in this loop, so this case does not arise on the wire).
+func markLastMessageCacheable(msgs []map[string]interface{}) {
+	if len(msgs) == 0 {
+		return
+	}
+	last := msgs[len(msgs)-1]
+	switch c := last["content"].(type) {
+	case string:
+		last["content"] = []map[string]interface{}{
+			{"type": "text", "text": c, "cache_control": map[string]string{"type": "ephemeral"}},
+		}
+	case []map[string]interface{}:
+		if len(c) > 0 {
+			c[len(c)-1]["cache_control"] = map[string]string{"type": "ephemeral"}
+		}
+	}
 }
 
 func callAgentAPI(key, model, system string, messages []agentMessage, tools []agentTool) (*agentAPIResponse, error) {
@@ -70,10 +111,27 @@ func callAgentAPI(key, model, system string, messages []agentMessage, tools []ag
 		apiMessages = append(apiMessages, msg)
 	}
 
+	// Mark the tools+system prefix cacheable so turns 2..N pay ~10% input cost
+	// on it. Marker goes on the last tool; system precedes tools in the request
+	// so a single marker at the tools tail caches both.
+	if len(tools) > 0 {
+		tools[len(tools)-1].CacheControl = ephemeralCache
+	}
+
+	// Mark the growing message history cacheable through the last block being
+	// sent this turn. Everything before the marker (all prior turns, all tool
+	// results, plus system+tools) reuses cached tokens on the next call.
+	markLastMessageCacheable(apiMessages)
+
+	var systemBlocks []systemBlock
+	if system != "" {
+		systemBlocks = []systemBlock{{Type: "text", Text: system}}
+	}
+
 	reqBody := agentAPIRequest{
 		Model:     model,
 		MaxTokens: 8192,
-		System:    system,
+		System:    systemBlocks,
 		Messages:  apiMessages,
 		Tools:     tools,
 	}
