@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -67,6 +68,16 @@ type contentBlock struct {
 	Input map[string]interface{} `json:"input,omitempty"`
 }
 
+// logCacheUsage prints a one-line summary of the cache activation for the most
+// recent API call. Called from the spike agent when PLANCHECK_SPIKE_DEBUG=1.
+func logCacheUsage(u apiUsage) {
+	if u.CacheReadInputTokens == 0 && u.CacheCreationInputTokens == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "[spike] cache: read=%d created=%d input=%d\n",
+		u.CacheReadInputTokens, u.CacheCreationInputTokens, u.InputTokens)
+}
+
 // markLastMessageCacheable attaches ephemeral cache_control to the final
 // content element of the final message in msgs. Anthropic caches everything
 // in the request up to and including this element. String content is upgraded
@@ -112,10 +123,14 @@ func callAgentAPI(key, model, system string, messages []agentMessage, tools []ag
 	}
 
 	// Mark the tools+system prefix cacheable so turns 2..N pay ~10% input cost
-	// on it. Marker goes on the last tool; system precedes tools in the request
-	// so a single marker at the tools tail caches both.
+	// on it. Copy the tools slice before mutating so we don't reach back into
+	// the caller's state (the exploration loop reuses the same slice across
+	// turns; the mutation would be idempotent but leaks a package invariant).
 	if len(tools) > 0 {
-		tools[len(tools)-1].CacheControl = ephemeralCache
+		toolsCopy := make([]agentTool, len(tools))
+		copy(toolsCopy, tools)
+		toolsCopy[len(toolsCopy)-1].CacheControl = ephemeralCache
+		tools = toolsCopy
 	}
 
 	// Mark the growing message history cacheable through the last block being
@@ -123,9 +138,13 @@ func callAgentAPI(key, model, system string, messages []agentMessage, tools []ag
 	// results, plus system+tools) reuses cached tokens on the next call.
 	markLastMessageCacheable(apiMessages)
 
+	// Mark the system prompt cacheable too. Redundant with the last-tool marker
+	// when tools are present, but on impl turns (tools=nil) it gives an extra
+	// breakpoint at the tiny static prefix so the cache survives even if the
+	// message-history marker drifts.
 	var systemBlocks []systemBlock
 	if system != "" {
-		systemBlocks = []systemBlock{{Type: "text", Text: system}}
+		systemBlocks = []systemBlock{{Type: "text", Text: system, CacheControl: ephemeralCache}}
 	}
 
 	reqBody := agentAPIRequest{

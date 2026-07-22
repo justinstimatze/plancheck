@@ -221,9 +221,8 @@ func runAgentSpike(cwd string, graph *refgraph.Graph, planFiles []string,
 			break
 		}
 		cost.AddTokens(resp.Usage.InputTokens, resp.Usage.OutputTokens, model)
-		if debugSpike && (resp.Usage.CacheReadInputTokens > 0 || resp.Usage.CacheCreationInputTokens > 0) {
-			fmt.Fprintf(os.Stderr, "[spike] cache: read=%d created=%d input=%d\n",
-				resp.Usage.CacheReadInputTokens, resp.Usage.CacheCreationInputTokens, resp.Usage.InputTokens)
+		if debugSpike {
+			logCacheUsage(resp.Usage)
 		}
 
 		hasToolUse := false
@@ -346,9 +345,8 @@ func runAgentSpike(cwd string, graph *refgraph.Graph, planFiles []string,
 			break
 		}
 		cost.AddTokens(resp.Usage.InputTokens, resp.Usage.OutputTokens, model)
-		if debugSpike && (resp.Usage.CacheReadInputTokens > 0 || resp.Usage.CacheCreationInputTokens > 0) {
-			fmt.Fprintf(os.Stderr, "[spike] cache: read=%d created=%d input=%d\n",
-				resp.Usage.CacheReadInputTokens, resp.Usage.CacheCreationInputTokens, resp.Usage.InputTokens)
+		if debugSpike {
+			logCacheUsage(resp.Usage)
 		}
 
 		foundThisTurn := 0
