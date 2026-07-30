@@ -473,7 +473,13 @@ func setupSkill(home string, force bool) error {
 	if err != nil {
 		return err
 	}
-	if before == skill.StatusModified && !force {
+	if force {
+		return nil // Install wrote it regardless of what was there before
+	}
+	switch before {
+	case skill.StatusUntracked:
+		return fmt.Errorf("%s predates version tracking, so it may or may not carry your edits — left as-is. To take this version: plancheck setup --force-skill", skill.Path(home))
+	case skill.StatusModified:
 		return fmt.Errorf("%s has local edits — left as-is. To replace it with this version: plancheck setup --force-skill", skill.Path(home))
 	}
 	return nil

@@ -218,9 +218,13 @@ func (c *DoctorCmd) Run() error {
 		check("skill file", true, "")
 	case skill.StatusStale:
 		warn("skill file current", false, "installed skill is from an older plancheck. Run: plancheck setup")
+	case skill.StatusUntracked:
+		warn("skill file current", false,
+			"installed skill predates version tracking, so plancheck can't tell whether you've edited it. "+
+				"To take this version: plancheck setup --force-skill")
 	case skill.StatusModified:
 		warn("skill file current", false,
-			fmt.Sprintf("%s differs from this binary's version and has local edits. To replace: plancheck setup --force-skill", skill.Path(home)))
+			fmt.Sprintf("%s has local edits and is missing changes from this version. To replace: plancheck setup --force-skill", skill.Path(home)))
 	}
 
 	// 6. Check for hash collisions in project dirs

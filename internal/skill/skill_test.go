@@ -97,20 +97,45 @@ func TestInstall_PreservesLocalEditsWithoutForce(t *testing.T) {
 	}
 }
 
-// Installs predating stamp tracking are indistinguishable from hand-edited
-// ones, so they must get the cautious treatment rather than a silent rewrite.
-func TestCheck_UnstampedInstallIsTreatedAsModified(t *testing.T) {
+// Every install from before fingerprint tracking lands here on first upgrade.
+// It must not be reported as edited — usually it is an untouched old file —
+// and it must still not be rewritten without force.
+func TestCheck_UnstampedInstallIsUntrackedNotModified(t *testing.T) {
 	home := t.TempDir()
-	writeInstalled(t, home, "# a skill from before stamping\n", "")
+	old := "# a skill from before stamping\n"
+	writeInstalled(t, home, old, "")
 
-	if got := Check(home); got != StatusModified {
-		t.Errorf("got %q, want %q", got, StatusModified)
+	if got := Check(home); got != StatusUntracked {
+		t.Errorf("got %q, want %q", got, StatusUntracked)
 	}
 	if _, err := Install(home, false); err != nil {
 		t.Fatal(err)
 	}
+	data, err := os.ReadFile(Path(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != old {
+		t.Error("untracked install was rewritten without force")
+	}
+
+	if _, err := Install(home, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := Check(home); got != StatusCurrent {
+		t.Errorf("after forced install: got %q, want %q", got, StatusCurrent)
+	}
+}
+
+// A stamp that no longer matches the file is proof of an edit, which is a
+// different claim from "no stamp" and gets a different message.
+func TestCheck_StampMismatchIsModified(t *testing.T) {
+	home := t.TempDir()
+	shipped := "# what plancheck wrote\n"
+	writeInstalled(t, home, shipped+"my notes\n", sum(shipped))
+
 	if got := Check(home); got != StatusModified {
-		t.Errorf("unstamped install should be left alone, got %q", got)
+		t.Errorf("got %q, want %q", got, StatusModified)
 	}
 }
 

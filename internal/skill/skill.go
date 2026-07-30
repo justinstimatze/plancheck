@@ -42,9 +42,13 @@ const (
 	// StatusStale means the installed skill is an older plancheck version,
 	// unmodified since install, and safe to replace.
 	StatusStale Status = "stale"
-	// StatusModified means the installed skill differs from both the embedded
-	// markdown and whatever plancheck last wrote — someone edited it, or it
-	// predates fingerprint tracking. Never replaced without force.
+	// StatusUntracked means the installed skill carries no fingerprint at all.
+	// Every install from before fingerprint tracking looks like this, so it is
+	// the common case on first upgrade and usually just an old unedited file —
+	// but nothing here can prove that, so it is never replaced without force.
+	StatusUntracked Status = "untracked"
+	// StatusModified means plancheck wrote this skill and the content has
+	// changed since: someone edited it. Never replaced without force.
 	StatusModified Status = "modified"
 )
 
@@ -76,9 +80,11 @@ func Check(home string) Status {
 	}
 	stamp, err := os.ReadFile(filepath.Join(Dir(home), stampFile))
 	if err != nil {
-		// No fingerprint: either a pre-tracking install or a hand-managed
-		// file. Both look identical from here, so treat as modified.
-		return StatusModified
+		// No fingerprint to compare against. Almost always an install from
+		// before tracking existed, but "old and untouched" and "edited" are
+		// indistinguishable without a stamp, so say unknown rather than
+		// accusing the user of edits they may not have made.
+		return StatusUntracked
 	}
 	if strings.TrimSpace(string(stamp)) == installed {
 		return StatusStale
@@ -94,7 +100,7 @@ func Install(home string, force bool) (Status, error) {
 	if status == StatusCurrent {
 		return status, nil
 	}
-	if status == StatusModified && !force {
+	if (status == StatusModified || status == StatusUntracked) && !force {
 		return status, nil
 	}
 	if err := os.MkdirAll(Dir(home), 0o700); err != nil {
