@@ -29,9 +29,24 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      # Retried because this is the only shot. Dependabot will not push again
+      # on its own, so pull_request_target never re-fires and a PR that loses
+      # this call sits open forever with green checks. The first real run hit
+      # a 504 from the merge API and stranded exactly that way.
       - name: Enable auto-merge for non-major updates
         if: steps.meta.outputs.update-type != 'version-update:semver-major'
-        run: gh pr merge --auto --squash "$PR_URL"
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if gh pr merge --auto --squash "$PR_URL"; then
+              echo "auto-merge enabled on attempt $attempt"
+              exit 0
+            fi
+            delay=$((attempt * 10))
+            echo "attempt $attempt failed, retrying in ${delay}s"
+            sleep "$delay"
+          done
+          echo "::error::could not enable auto-merge after 5 attempts — merge $PR_URL by hand"
+          exit 1
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
