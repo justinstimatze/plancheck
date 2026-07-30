@@ -46,6 +46,11 @@ func buildImplementationPreview(spike *simulate.SpikeResult, graph *refgraph.Gra
 		})
 	}
 
+	// Open decisions: forks the plan left to the spike. Passed through as-is —
+	// there's nothing to rank, since the question is whether the plan text
+	// answers them, not how strong the evidence is.
+	preview.OpenDecisions = spike.OpenDecisions
+
 	// Risks: derived from the spike's changes + graph
 	for _, pred := range spike.Predictions {
 		if strings.Contains(pred.Reason, "broken caller") {

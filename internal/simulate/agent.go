@@ -38,11 +38,12 @@ type ExploredDef struct {
 
 // AgentResult is the output of the agent spike.
 type AgentResult struct {
-	Files        []AgentFile       `json:"files"`        // files with scoring metadata
-	FileBlocks   map[string]string `json:"fileBlocks"`   // file path → implemented code
-	ToolCalls    int               `json:"toolCalls"`    // how many tool calls it made
-	ExploredDefs []ExploredDef     `json:"-"`            // definitions looked up via code()
-	Cost         types.CostSummary `json:"cost"`         // API token usage
+	Files         []AgentFile          `json:"files"`         // files with scoring metadata
+	FileBlocks    map[string]string    `json:"fileBlocks"`    // file path → implemented code
+	ToolCalls     int                  `json:"toolCalls"`     // how many tool calls it made
+	ExploredDefs  []ExploredDef        `json:"-"`             // definitions looked up via code()
+	OpenDecisions []types.OpenDecision `json:"openDecisions"` // plan gaps the agent guessed past
+	Cost          types.CostSummary    `json:"cost"`          // API token usage
 }
 
 // RunAgentSpike runs the tool-using agent implementation.
@@ -406,6 +407,43 @@ func runAgentSpike(cwd string, graph *refgraph.Graph, planFiles []string,
 		}
 	}
 
+	// Ask what the plan left open. The agent had to answer these to write the
+	// code at all — it just wasn't asked to say so. This runs AFTER every file
+	// block is extracted, so it cannot move file recall either way, and the
+	// whole conversation prefix is already cached, so the marginal cost is the
+	// cache-read rate plus a few hundred output tokens.
+	var openDecisions []types.OpenDecision
+	if os.Getenv("PLANCHECK_NO_DECISIONS") != "1" {
+		messages = append(messages, agentMessage{
+			Role:    "user",
+			Content: openDecisionsPrompt,
+		})
+		resp, err := callAgentAPI(key, model, systemPrompt, messages, nil)
+		if err != nil && debugSpike {
+			// Best-effort channel: a failure here must not fail the check, but
+			// silently returning zero decisions is indistinguishable from
+			// "the plan specified everything," so say which one happened.
+			fmt.Fprintf(os.Stderr, "[spike] open-decisions turn failed: %v\n", err)
+		}
+		if err == nil {
+			cost.AddTokens(resp.Usage.InputTokens, resp.Usage.OutputTokens, model)
+			if debugSpike {
+				logCacheUsage(resp.Usage)
+			}
+			for _, block := range resp.Content {
+				if block.Type == "text" {
+					openDecisions = append(openDecisions, extractOpenDecisions(block.Text)...)
+				}
+			}
+			if len(openDecisions) > maxOpenDecisions {
+				openDecisions = openDecisions[:maxOpenDecisions]
+			}
+			if debugSpike {
+				fmt.Fprintf(os.Stderr, "[spike] open decisions: %d\n", len(openDecisions))
+			}
+		}
+	}
+
 	// Build scored file list
 	var agentFiles []AgentFile
 	for f := range allImplementedFiles {
@@ -512,11 +550,12 @@ func runAgentSpike(cwd string, graph *refgraph.Graph, planFiles []string,
 	}
 
 	return &AgentResult{
-		Files:        agentFiles,
-		FileBlocks:   allFileBlocks,
-		ToolCalls:    totalToolCalls,
-		ExploredDefs: exploredDefs,
-		Cost:         cost,
+		Files:         agentFiles,
+		FileBlocks:    allFileBlocks,
+		ToolCalls:     totalToolCalls,
+		ExploredDefs:  exploredDefs,
+		OpenDecisions: openDecisions,
+		Cost:          cost,
 	}, nil
 }
 
@@ -619,4 +658,3 @@ func cleanGoPath(f string) string {
 	}
 	return f
 }
-

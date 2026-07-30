@@ -14,11 +14,11 @@ import (
 
 // ExecutionPlan is the input plan to check.
 type ExecutionPlan struct {
-	Objective         string            `json:"objective"`
-	FilesToRead       []string          `json:"filesToRead"`
-	FilesToModify     []string          `json:"filesToModify"`
-	FilesToCreate     []string          `json:"filesToCreate"`
-	Steps             []string          `json:"steps"`
+	Objective              string            `json:"objective"`
+	FilesToRead            []string          `json:"filesToRead"`
+	FilesToModify          []string          `json:"filesToModify"`
+	FilesToCreate          []string          `json:"filesToCreate"`
+	Steps                  []string          `json:"steps"`
 	AcknowledgedComod      map[string]string `json:"acknowledgedComod,omitempty"`
 	AcknowledgedDomainGaps []string          `json:"acknowledgedDomainGaps,omitempty"`
 	// SemanticSuggestions are files the model thinks might need changing
@@ -178,8 +178,8 @@ type PlanStats struct {
 
 // SuggestedAdditions contains files suggested to close detected gaps.
 type SuggestedAdditions struct {
-	FilesToModify []string       `json:"filesToModify,omitempty"`
-	Ranked        []RankedFile   `json:"ranked,omitempty"` // top-K files by combined score
+	FilesToModify []string     `json:"filesToModify,omitempty"`
+	Ranked        []RankedFile `json:"ranked,omitempty"` // top-K files by combined score
 }
 
 // RankedFile is a file ranked by combined structural + statistical score.
@@ -213,9 +213,9 @@ type NoveltySummary struct {
 
 // ForecastSummary is the MC forecast output included in check_plan results.
 type ForecastSummary struct {
-	PClean   float64 `json:"pClean"`   // probability of clean execution
-	PRework  float64 `json:"pRework"`  // probability of minor rework
-	PFailed  float64 `json:"pFailed"`  // probability of significant rework
+	PClean    float64 `json:"pClean"`  // probability of clean execution
+	PRework   float64 `json:"pRework"` // probability of minor rework
+	PFailed   float64 `json:"pFailed"` // probability of significant rework
 	RecallP50 float64 `json:"recallP50"`
 	RecallP85 float64 `json:"recallP85"`
 	BasedOn   int     `json:"basedOn"` // number of historical data points
@@ -227,15 +227,15 @@ type SimulationSummary struct {
 	ProductionCallers int      `json:"productionCallers,omitempty"`
 	TestCoverage      int      `json:"testCoverage,omitempty"`
 	TestDensity       float64  `json:"testDensity,omitempty"`
-	Confidence        string   `json:"confidence,omitempty"`        // high, moderate, low
+	Confidence        string   `json:"confidence,omitempty"` // high, moderate, low
 	HighImpactDefs    []string `json:"highImpactDefs,omitempty"`
-	BaseRateRecall    float64  `json:"baseRateRecall,omitempty"`    // historical recall for similar changes
-	BaseRateHitRate   float64  `json:"baseRateHitRate,omitempty"`   // historical hit rate for similar changes
-	BaseRateSource    string   `json:"baseRateSource,omitempty"`    // what reference class was used
-	CascadeDepth      int      `json:"cascadeDepth,omitempty"`      // depth of ripple chain
-	CascadeFiles      int      `json:"cascadeFiles,omitempty"`      // unique files in ripple chain
-	CascadeBreaks     int      `json:"cascadeBreaks,omitempty"`     // total breakages across chain
-	CascadeConverged  bool     `json:"cascadeConverged,omitempty"`  // did ripples die out?
+	BaseRateRecall    float64  `json:"baseRateRecall,omitempty"`   // historical recall for similar changes
+	BaseRateHitRate   float64  `json:"baseRateHitRate,omitempty"`  // historical hit rate for similar changes
+	BaseRateSource    string   `json:"baseRateSource,omitempty"`   // what reference class was used
+	CascadeDepth      int      `json:"cascadeDepth,omitempty"`     // depth of ripple chain
+	CascadeFiles      int      `json:"cascadeFiles,omitempty"`     // unique files in ripple chain
+	CascadeBreaks     int      `json:"cascadeBreaks,omitempty"`    // total breakages across chain
+	CascadeConverged  bool     `json:"cascadeConverged,omitempty"` // did ripples die out?
 }
 
 // PlanCheckResult is the complete output of a plan check.
@@ -249,13 +249,27 @@ type ImplementationPreview struct {
 	Obligations []Obligation `json:"obligations,omitempty"`
 	// Risks are things that could go wrong during implementation
 	Risks []string `json:"risks,omitempty"`
+	// OpenDecisions are choices the spike had to invent because the plan
+	// didn't specify them. Each is a fork, not a weak prediction: a
+	// different answer implies a different file set.
+	OpenDecisions []OpenDecision `json:"openDecisions,omitempty"`
+}
+
+// OpenDecision is a choice the plan left unspecified that the spike had to
+// make in order to write code. Only decisions whose alternative would change
+// which files are touched are reported — cosmetic choices are dropped.
+type OpenDecision struct {
+	Question    string   `json:"question"`              // what the plan left open
+	Chose       string   `json:"chose"`                 // what the spike picked
+	Alternative string   `json:"alternative,omitempty"` // the other plausible answer
+	Affects     []string `json:"affects,omitempty"`     // files that differ between the two
 }
 
 // FileChange describes what the spike changed in a specific file.
 type FileChange struct {
 	File    string `json:"file"`
-	Summary string `json:"summary"` // human-readable: "adds Draft bool field to CreateOptions"
-	Kind    string `json:"kind"`    // "struct-field", "new-function", "signature-change", "body-change"
+	Summary string `json:"summary"`        // human-readable: "adds Draft bool field to CreateOptions"
+	Kind    string `json:"kind"`           // "struct-field", "new-function", "signature-change", "body-change"
 	Diff    string `json:"diff,omitempty"` // condensed diff showing the actual code changes
 }
 
@@ -266,22 +280,22 @@ type Obligation struct {
 }
 
 type PlanCheckResult struct {
-	HistoryID          string              `json:"historyId"`
-	PlanHash           string              `json:"planHash,omitempty"` // hash of objective+files, detects plan rewrites
-	ProjectType        string              `json:"projectType"`
-	PlanStats          PlanStats           `json:"planStats"`
-	MissingFiles       []MissingFileResult `json:"missingFiles,omitempty"`
-	ComodGaps          []ComodGap          `json:"comodGaps,omitempty"`
-	Simulation         *SimulationSummary  `json:"simulation,omitempty"`
-	Forecast           *ForecastSummary    `json:"forecast,omitempty"`
-	Novelty            *NoveltySummary     `json:"novelty,omitempty"`
-	Predictions        []FilePrediction    `json:"predictions,omitempty"`
-	ProjectPatterns    []ProjectPattern    `json:"projectPatterns,omitempty"`
-	Signals            []Signal            `json:"signals,omitempty"`
-	Critique           []string            `json:"critique,omitempty"`
-	SuggestedAdditions SuggestedAdditions  `json:"suggestedAdditions"`
+	HistoryID          string                 `json:"historyId"`
+	PlanHash           string                 `json:"planHash,omitempty"` // hash of objective+files, detects plan rewrites
+	ProjectType        string                 `json:"projectType"`
+	PlanStats          PlanStats              `json:"planStats"`
+	MissingFiles       []MissingFileResult    `json:"missingFiles,omitempty"`
+	ComodGaps          []ComodGap             `json:"comodGaps,omitempty"`
+	Simulation         *SimulationSummary     `json:"simulation,omitempty"`
+	Forecast           *ForecastSummary       `json:"forecast,omitempty"`
+	Novelty            *NoveltySummary        `json:"novelty,omitempty"`
+	Predictions        []FilePrediction       `json:"predictions,omitempty"`
+	ProjectPatterns    []ProjectPattern       `json:"projectPatterns,omitempty"`
+	Signals            []Signal               `json:"signals,omitempty"`
+	Critique           []string               `json:"critique,omitempty"`
+	SuggestedAdditions SuggestedAdditions     `json:"suggestedAdditions"`
 	Preview            *ImplementationPreview `json:"preview,omitempty"`
-	Cost               *CostSummary        `json:"cost,omitempty"`
+	Cost               *CostSummary           `json:"cost,omitempty"`
 }
 
 // CostSummary tracks API token usage and estimated cost for a plan check.
@@ -371,7 +385,7 @@ type FindingCounts struct {
 // Full details are available via get_check_details.
 type CompactCheckResult struct {
 	// Minto pyramid: answer first, then evidence
-	Summary            string             `json:"summary"`            // one-paragraph recommendation
+	Summary            string             `json:"summary"` // one-paragraph recommendation
 	ServerVersion      string             `json:"serverVersion,omitempty"`
 	HistoryID          string             `json:"historyId"`
 	ProjectType        string             `json:"projectType"`
@@ -383,6 +397,10 @@ type CompactCheckResult struct {
 	TopFindings        []string           `json:"topFindings,omitempty"`
 	SuggestedAdditions SuggestedAdditions `json:"suggestedAdditions,omitempty"`
 	ProjectPatterns    []ProjectPattern   `json:"projectPatterns,omitempty"`
+	// OpenDecisions are plan gaps the spike had to guess past. Unlike file
+	// suggestions these aren't ranked or gated — they're either in the plan
+	// text or they aren't.
+	OpenDecisions []OpenDecision `json:"openDecisions,omitempty"`
 }
 
 // ToCompact converts a full PlanCheckResult to a CompactCheckResult.
@@ -413,6 +431,9 @@ func (r *PlanCheckResult) ToCompact() CompactCheckResult {
 		Predictions:        r.Predictions,
 		SuggestedAdditions: r.SuggestedAdditions,
 		ProjectPatterns:    r.ProjectPatterns,
+	}
+	if r.Preview != nil {
+		c.OpenDecisions = r.Preview.OpenDecisions
 	}
 	// Include top critique entries so the model gets actionable info in one call
 	limit := 5
@@ -465,6 +486,27 @@ func buildSummary(r *PlanCheckResult) string {
 		}
 		if rf.Reason != "" {
 			parts = append(parts, fmt.Sprintf("  %s — %s", rf.File, rf.Reason))
+		}
+	}
+
+	// DECIDE: forks the plan left open. Not file suggestions — the spike had
+	// to pick an answer to write code at all, and a different pick moves the
+	// file set. Specifying these in the plan is cheaper than reworking later.
+	if r.Preview != nil && len(r.Preview.OpenDecisions) > 0 {
+		parts = append(parts, fmt.Sprintf("DECIDE: %d choice(s) your plan leaves open — the spike guessed.",
+			len(r.Preview.OpenDecisions)))
+		for i, od := range r.Preview.OpenDecisions {
+			if i >= 3 {
+				break
+			}
+			line := fmt.Sprintf("  %s — spike chose %s", od.Question, od.Chose)
+			if od.Alternative != "" {
+				line += fmt.Sprintf(" (alt: %s)", od.Alternative)
+			}
+			if len(od.Affects) > 0 {
+				line += fmt.Sprintf("; changes %s", strings.Join(od.Affects, ", "))
+			}
+			parts = append(parts, line)
 		}
 	}
 

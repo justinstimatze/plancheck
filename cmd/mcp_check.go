@@ -56,6 +56,13 @@ func handleCheckPlan(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolR
 		lean["ranked"] = compact.SuggestedAdditions.Ranked
 	}
 
+	// Open decisions: forks the spike had to guess past. Separate from ranked
+	// files because the fix is different — you answer these in the plan text
+	// rather than adding a path to filesToModify.
+	if len(compact.OpenDecisions) > 0 {
+		lean["openDecisions"] = compact.OpenDecisions
+	}
+
 	// Semantic validation: confirm/deny the model's own suggestions
 	var validated []map[string]string
 	for _, sig := range result.Signals {

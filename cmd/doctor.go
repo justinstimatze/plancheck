@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/justinstimatze/plancheck/internal/refgraph"
+	"github.com/justinstimatze/plancheck/internal/skill"
 )
 
 type DoctorCmd struct{}
@@ -207,10 +208,20 @@ func (c *DoctorCmd) Run() error {
 		}
 	}
 
-	// 5. Skill file exists
-	skillPath := filepath.Join(home, ".claude", "skills", "check-plan", "SKILL.md")
-	_, skillErr := os.Stat(skillPath)
-	check("skill file", skillErr == nil, fmt.Sprintf("%s not found", skillPath))
+	// 5. Skill file exists and matches this binary's version. A stale skill
+	// is the quiet failure: check_plan keeps returning fields the installed
+	// skill never tells the agent to read.
+	switch skill.Check(home) {
+	case skill.StatusMissing:
+		check("skill file", false, fmt.Sprintf("%s not found. Run: plancheck setup", skill.Path(home)))
+	case skill.StatusCurrent:
+		check("skill file", true, "")
+	case skill.StatusStale:
+		warn("skill file current", false, "installed skill is from an older plancheck. Run: plancheck setup")
+	case skill.StatusModified:
+		warn("skill file current", false,
+			fmt.Sprintf("%s differs from this binary's version and has local edits. To replace: plancheck setup --force-skill", skill.Path(home)))
+	}
 
 	// 6. Check for hash collisions in project dirs
 	projectsDir := filepath.Join(home, ".plancheck", "projects")

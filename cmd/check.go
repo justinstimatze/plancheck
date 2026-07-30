@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/justinstimatze/plancheck/internal/history"
 	"github.com/justinstimatze/plancheck/internal/plan"
@@ -57,6 +58,20 @@ func (c *CheckCmd) Run() error {
 	} else {
 		for _, line := range result.Critique {
 			fmt.Printf("  • %s\n", line)
+		}
+	}
+
+	if result.Preview != nil && len(result.Preview.OpenDecisions) > 0 {
+		fmt.Println("\nOpen decisions (the plan didn't say; the spike picked one):")
+		for _, od := range result.Preview.OpenDecisions {
+			fmt.Printf("  ? %s\n", od.Question)
+			fmt.Printf("    chose: %s\n", od.Chose)
+			if od.Alternative != "" {
+				fmt.Printf("    alt:   %s\n", od.Alternative)
+			}
+			if len(od.Affects) > 0 {
+				fmt.Printf("    moves: %s\n", strings.Join(od.Affects, ", "))
+			}
 		}
 	}
 

@@ -22,10 +22,11 @@ import (
 
 // SpikeResult is the output of the implementation spike.
 type SpikeResult struct {
-	Predictions []SpikePrediction `json:"predictions"`
-	Obligations []Obligation      `json:"obligations,omitempty"` // MUST-change files
-	FileBlocks  map[string]string `json:"-"`
-	Cost        types.CostSummary `json:"cost"` // API token usage
+	Predictions   []SpikePrediction    `json:"predictions"`
+	Obligations   []Obligation         `json:"obligations,omitempty"`   // MUST-change files
+	OpenDecisions []types.OpenDecision `json:"openDecisions,omitempty"` // plan gaps the spike guessed past
+	FileBlocks    map[string]string    `json:"-"`
+	Cost          types.CostSummary    `json:"cost"` // API token usage
 }
 
 // SpikePrediction is a file the engineer touched during implementation.
@@ -175,10 +176,11 @@ func RunSpike(cwd string, graph *refgraph.Graph, planFiles []string,
 			}
 
 			return &SpikeResult{
-				Predictions: predictions,
-				Obligations: obligations,
-				FileBlocks:  agentResult.FileBlocks,
-				Cost:        agentResult.Cost,
+				Predictions:   predictions,
+				Obligations:   obligations,
+				OpenDecisions: agentResult.OpenDecisions,
+				FileBlocks:    agentResult.FileBlocks,
+				Cost:          agentResult.Cost,
 			}, nil
 		}
 	}

@@ -25,7 +25,9 @@ If the file doesn't exist, proceed normally — it will be created after the fir
 
 **When to run:** The plan touches source files AND the `check_plan` MCP tool is available. Skip for non-code plans.
 
-1. Serialize the plan as ExecutionPlan JSON. Include `semanticSuggestions` — files you think might need changing but haven't committed to:
+1. Serialize the plan as ExecutionPlan JSON. Two optional fields carry most of the value — include both by default, not just when a plan looks risky.
+
+   `semanticSuggestions` — files you think might need changing but haven't committed to:
    ```json
    "semanticSuggestions": [
      {"file": "routes.go", "confidence": 0.7, "reason": "registers the new handler"},
@@ -33,20 +35,35 @@ If the file doesn't exist, proceed normally — it will be created after the fir
    ]
    ```
    plancheck validates each suggestion against the reference graph and git history. You'll see which suggestions have structural support (must/likely) vs semantic-only (consider).
+
+   `invariants` — what must be true when the plan is done. Write these before tracing, not after; they anchor the backward trace in Step 2 and give it something concrete to work back from:
+   ```json
+   "invariants": [
+     {"claim": "existing callers of Run() keep compiling", "kind": "api-compat"},
+     {"claim": "the new path is covered by tests", "kind": "tests"}
+   ]
+   ```
+   `kind` is one of `tests`, `api-compat`, `no-new-deps`, or `custom`. plancheck checks each against the reference graph and returns them under `invariants` — an unverified one names a risk the plan hasn't handled ("no tests found covering modified definitions"). A plan with no invariants has no stated end-state, which makes the backward trace guesswork.
 2. Call `check_plan` with plan_json and cwd
 3. Note the `historyId` — hold it for the reflection at the end
 4. Fix any missingFiles findings before continuing
 5. If `projectPatterns` contains recurring-miss files, add them to the plan or explain why they're not needed
-6. **Read the forecast** — if `pFailed > 0.4`, the plan has high risk:
+6. **Read `openDecisions`** — choices the spike had to invent because the plan
+   didn't specify them, where a different answer moves the file set. These are
+   not file suggestions and the fix is different: answer the question in the
+   plan text, or say explicitly that either answer is fine. Leaving one open
+   means the file list below it is conditional. If a decision needs the user's
+   judgment (a product choice, a schema commitment), ask rather than guess.
+7. **Read the forecast** — if `pFailed > 0.4`, the plan has high risk:
    - Consider subdividing into smaller increments
-   - Add invariants to anchor verification
+   - Tighten the invariants — a vague end-state is a common cause of a high `pFailed`
    - Focus verification on the riskiest steps
-7. **Read the novelty** — if `label` is "novel" or "exploratory":
+8. **Read the novelty** — if `label` is "novel" or "exploratory":
    - The reference graph can't help much (new code has no connections)
    - Look at analogy signals — cross-project patterns for similar code
    - Look at backward-scout signals — prerequisites you might be missing
    - Consider a spike on the riskiest new component
-8. **Read the ranked suggestions** — these are files you probably forgot,
+9. **Read the ranked suggestions** — these are files you probably forgot,
    scored by combined structural + comod + analogy signals. Check the top 3.
 
 **Use probe signals during verification:**
@@ -84,6 +101,8 @@ Stop when you're no longer confident about what state you're in. State explicitl
 ### Step 2 — Trace backward from goal
 
 Start from the completed goal. Work backward: "The goal is done. What were the last few steps that produced it?"
+
+The plan's `invariants` are the goal restated as checkable claims — start the backward trace from those rather than from a prose restatement of the objective.
 
 For each step (in reverse), state:
 - **After**: what must be true after this step

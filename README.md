@@ -16,6 +16,8 @@ Go-only. Requires [defn](https://github.com/justinstimatze/defn) for reference g
 
 An LLM agent reads the plan files, explores the codebase with tools (definition lookup, impact analysis, grep), then writes a prototype implementation. The files it touches become predictions. Combined with compiler verification and structural signals, this produces a ranked list of files the plan is likely missing.
 
+It also reports **open decisions** — questions the plan left unanswered that the spike had to answer to write code at all, where a different answer moves the file set. "Should these types live in `cmd/` or a new `internal/review` package?" is not a file suggestion, and no structural signal can produce it: the alternative names a file that doesn't exist yet, so it has no graph node, no callers, and no co-change history. The fix is to answer the question in the plan, not to add a path.
+
 **+17.7pp recall on cli/cli (50 tasks, single run).** Cost estimated at ~$0.05-0.15/task (Sonnet pricing, not instrumented).
 
 ### `plancheck review [base_ref]` — after coding
@@ -57,6 +59,12 @@ plancheck doctor       # verify everything
 - **Suggest hook** — shows compiler-verified suggestions after Go file edits
 - **Check-plan skill** — persona-based plan verification
 - **Git pre-commit hook** — runs `go vet`, short tests, and `plancheck review` before each commit
+
+Re-running `plancheck setup` after an upgrade replaces the check-plan skill if
+you haven't edited it, and leaves it alone if you have — `plancheck doctor`
+reports which case you're in. `plancheck setup --force-skill` overwrites an
+edited skill. A stale skill fails quietly: `check_plan` keeps returning fields
+the installed skill never tells the agent to read.
 
 Setup writes hooks and MCP config pointing at `~/go/bin/plancheck`, the stable
 `go install` path. This means `go install github.com/justinstimatze/plancheck@latest`
@@ -146,6 +154,7 @@ Plancheck's product surface is deliberately additive to the caller's session: `s
 | `PLANCHECK_NO_SPIKE` | *(unset)* | Set to `1` to skip the LLM spike (structural signals only) |
 | `PLANCHECK_SPIKE_MODEL` | `claude-sonnet-4-6` | Model for the implementation spike |
 | `PLANCHECK_SPIKE_DEBUG` | *(unset)* | Set to `1` to print spike tool calls to stderr |
+| `PLANCHECK_NO_DECISIONS` | *(unset)* | Set to `1` to skip the open-decisions turn (saves one cache-warm API call per check) |
 | `PLANCHECK_JSON` | *(unset)* | Set to `1` for JSON output from `simulate` and `forecast` |
 
 ## License
