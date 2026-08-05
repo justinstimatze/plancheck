@@ -10,12 +10,15 @@ package simulate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -23,11 +26,79 @@ func contextWithTimeout(seconds int) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), time.Duration(seconds)*time.Second)
 }
 
+// ErrProbeTimeout means `go build` was killed before it finished, so the
+// compiler never rendered a verdict. This is NOT the same as a clean build:
+// a killed build emits no `file.go:line:col:` diagnostics, which is
+// byte-identical to success once the output is parsed. Callers must treat it
+// as "no signal", never as "no obligations".
+var ErrProbeTimeout = errors.New("build probe timed out before the compiler finished")
+
+// buildProbeTimeoutSecs bounds each probe build. Cold builds of a large
+// dependency graph can exceed this; that is what ErrProbeTimeout reports.
+// Variable rather than const so tests can force the timeout path.
+var buildProbeTimeoutSecs = 90
+
+// probeTimeoutSecs returns the probe build deadline, honouring
+// PLANCHECK_PROBE_TIMEOUT_SECS. Raise it on a slow host or a cold cache;
+// set it low to exercise the timeout path.
+func probeTimeoutSecs() int {
+	if v := os.Getenv("PLANCHECK_PROBE_TIMEOUT_SECS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return buildProbeTimeoutSecs
+}
+
+// probeEnv returns the environment for a probe build.
+//
+// It deliberately does NOT pin CGO_ENABLED. CGO_ENABLED is part of Go's
+// build-configuration hash, so forcing it to 0 on a host that builds with
+// cgo enabled gives probe builds their own disjoint build cache — one
+// populated only by plancheck, and therefore the one Go's 5-day trim evicts
+// first. Every probe then pays a cold rebuild of the whole dependency graph,
+// which is both slow (routinely past the timeout above) and write-heavy.
+// Inheriting the host's setting keeps probes on the same warm cache as the
+// developer's own builds.
+//
+// The original intent of pinning it to 0 was to survive a host with no C
+// toolchain, so that case is still handled — just detected instead of assumed.
+func probeEnv() []string {
+	env := os.Environ()
+	if !hasCToolchain() {
+		env = append(env, "CGO_ENABLED=0")
+	}
+	return env
+}
+
+var (
+	cToolchainOnce sync.Once
+	cToolchainOK   bool
+)
+
+// hasCToolchain reports whether the C compiler Go would invoke for cgo is
+// actually present. Result is cached — it cannot change within a process.
+func hasCToolchain() bool {
+	cToolchainOnce.Do(func() {
+		out, err := exec.Command("go", "env", "CC").Output()
+		if err != nil {
+			return
+		}
+		cc := strings.TrimSpace(string(out))
+		if cc == "" {
+			return
+		}
+		_, err = exec.LookPath(cc)
+		cToolchainOK = err == nil
+	})
+	return cToolchainOK
+}
+
 // BuildObligation is a file that the compiler says must change.
 type BuildObligation struct {
-	File   string // relative file path
+	File   string   // relative file path
 	Errors []string // compiler error messages
-	Count  int    // number of errors in this file
+	Count  int      // number of errors in this file
 }
 
 // BuildCheckResult is the output of the build-and-check pass.
@@ -58,7 +129,7 @@ func RunBuildCheck(fileBlocks map[string]string, cwd string) (*BuildCheckResult,
 		Replace: make(map[string]string),
 	}
 
-	spikeFiles := make(map[string]bool)    // normalized relative paths we're overlaying
+	spikeFiles := make(map[string]bool)     // normalized relative paths we're overlaying
 	tmpToRelPath := make(map[string]string) // temp file path → original relative path
 	for relPath, code := range fileBlocks {
 		absPath := filepath.Join(cwd, relPath)
@@ -106,13 +177,20 @@ func RunBuildCheck(fileBlocks map[string]string, cwd string) (*BuildCheckResult,
 		return nil, nil // not a Go project
 	}
 
-	// Run go build with overlay (30s timeout — we want errors, not a full build)
-	ctx, cancel := contextWithTimeout(30)
+	// Run go build with overlay. Compile errors are expected — they're the signal.
+	// A timeout is not: it yields empty output that parses as a clean build.
+	ctx, cancel := contextWithTimeout(probeTimeoutSecs())
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "go", "build", "-overlay="+overlayPath, "./...")
 	cmd.Dir = cwd
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0") // avoid CGO issues
-	output, _ := cmd.CombinedOutput() // errors expected — that's the signal
+	cmd.Env = probeEnv()
+	// Compile errors are expected — they exit non-zero and ARE the signal. Only
+	// treat this as a timeout when the deadline fired AND the command failed;
+	// a build that finished just before the deadline still has a valid verdict.
+	output, runErr := cmd.CombinedOutput()
+	if runErr != nil && ctx.Err() != nil {
+		return nil, fmt.Errorf("build check in %s: %w", cwd, ErrProbeTimeout)
+	}
 
 	// Parse compilation errors
 	// Format: path/to/file.go:line:col: error message
@@ -186,11 +264,11 @@ func RunBuildCheck(fileBlocks map[string]string, cwd string) (*BuildCheckResult,
 
 // patchTypeChanges applies the spike's type-level changes to the original.
 // Two strategies:
-// 1. For structs: if the spike has different fields, add a _probe field to the
-//    original struct. This is more robust than copying the spike's definition
-//    because it guarantees the file still parses. The compiler then finds
-//    every positional constructor that breaks.
-// 2. For functions: replace the original signature with the spike's signature.
+//  1. For structs: if the spike has different fields, add a _probe field to the
+//     original struct. This is more robust than copying the spike's definition
+//     because it guarantees the file still parses. The compiler then finds
+//     every positional constructor that breaks.
+//  2. For functions: replace the original signature with the spike's signature.
 func patchTypeChanges(original, spike string) string {
 	spikeStructs := extractStructDefs(spike)
 	spikeFuncs := extractFuncSigs(spike)
@@ -356,12 +434,15 @@ func RunBlastRadius(planFiles []string, cwd string) (*BlastRadiusResult, error) 
 		return nil, fmt.Errorf("write overlay: %w", err)
 	}
 
-	ctx, cancel := contextWithTimeout(30)
+	ctx, cancel := contextWithTimeout(probeTimeoutSecs())
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "go", "build", "-overlay="+overlayPath, "./...")
 	cmd.Dir = cwd
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
-	output, _ := cmd.CombinedOutput()
+	cmd.Env = probeEnv()
+	output, runErr := cmd.CombinedOutput()
+	if runErr != nil && ctx.Err() != nil {
+		return nil, fmt.Errorf("blast radius in %s: %w", cwd, ErrProbeTimeout)
+	}
 
 	errorRe := regexp.MustCompile(`(?m)^([^\s:]+\.go):(\d+):(\d+): (.+)$`)
 	matches := errorRe.FindAllStringSubmatch(string(output), -1)

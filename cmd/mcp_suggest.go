@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -142,6 +143,9 @@ func handleSuggest(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolRes
 
 	// 3. Build-check (if we can probe the touched files)
 	// Read the current file contents and probe exported symbols
+	// probeDegraded records that the compiler never rendered a verdict, so an
+	// empty result means "not measured" rather than "nothing to change".
+	probeDegraded := false
 	probeBlocks := make(map[string]string)
 	for _, touchedFile := range filesTouched {
 		absFile := filepath.Join(absCwd, touchedFile)
@@ -156,6 +160,9 @@ func handleSuggest(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolRes
 	}
 	if len(probeBlocks) > 0 {
 		buildResult, err := simulate.RunBuildCheck(probeBlocks, absCwd)
+		if errors.Is(err, simulate.ErrProbeTimeout) {
+			probeDegraded = true
+		}
 		if err == nil && buildResult != nil {
 			for _, bo := range buildResult.Obligations {
 				if seen[bo.File] {
@@ -226,10 +233,18 @@ func handleSuggest(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolRes
 
 	// Build response
 	if len(ranked) == 0 {
+		if probeDegraded {
+			return mcp.NewToolResultText("Inconclusive: the compiler probe timed out before finishing, " +
+				"so no compiler evidence was collected. This is NOT the same as a complete file set — " +
+				"the strongest signal is missing, not negative."), nil
+		}
 		return mcp.NewToolResultText("No additional files suggested. Your current file set looks complete."), nil
 	}
 
 	var b strings.Builder
+	if probeDegraded {
+		b.WriteString("NOTE: the compiler probe timed out — the suggestions below omit compiler evidence.\n\n")
+	}
 	must := 0
 	likely := 0
 	for _, s := range ranked {

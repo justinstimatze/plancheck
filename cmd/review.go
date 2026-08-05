@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -123,8 +124,14 @@ func (c *ReviewCmd) Run() error {
 			probeBlocks[f] = probed
 		}
 	}
+	// Tracks whether the compiler probe actually rendered a verdict. When it
+	// didn't, an empty result means "not measured" — never report it as clean.
+	probeDegraded := false
 	if len(probeBlocks) > 0 {
 		buildResult, err := simulate.RunBuildCheck(probeBlocks, absCwd)
+		if errors.Is(err, simulate.ErrProbeTimeout) {
+			probeDegraded = true
+		}
 		if err == nil && buildResult != nil {
 			for _, bo := range buildResult.Obligations {
 				// Filter files already in the modified set (multiple path formats)
@@ -204,8 +211,20 @@ func (c *ReviewCmd) Run() error {
 	})
 
 	if len(ranked) == 0 {
+		if probeDegraded {
+			// Not a clean bill of health — the compiler never finished, so the
+			// strongest signal is missing rather than negative.
+			fmt.Println("\x1b[33m! Inconclusive: the compiler probe timed out before finishing.\x1b[0m")
+			fmt.Println("  No compiler evidence was collected. This is NOT the same as a clean review.")
+			return nil
+		}
 		fmt.Println("\x1b[32m✓ No missing files detected. Your changes look complete.\x1b[0m")
 		return nil
+	}
+
+	if probeDegraded {
+		fmt.Println("\x1b[33m! The compiler probe timed out — results below omit compiler evidence.\x1b[0m")
+		fmt.Println()
 	}
 
 	// Output

@@ -4,6 +4,7 @@
 package plan
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -542,8 +543,16 @@ func Check(opts CheckOptions) types.PlanCheckResult {
 
 		// Plan file blast radius: probe ALL exported symbols in plan files.
 		// Context only — NOT a ranking signal. Shows the dependency cone.
-		blastResult, _ := simulate.RunBlastRadius(p.FilesToModify, cwd)
-		if blastResult != nil && len(blastResult.DependentFiles) > 0 {
+		blastResult, blastErr := simulate.RunBlastRadius(p.FilesToModify, cwd)
+		switch {
+		case errors.Is(blastErr, simulate.ErrProbeTimeout):
+			// Say so rather than reporting an empty cone. A timed-out probe
+			// produces the same zero dependents a genuinely isolated file does.
+			result.Signals = append(result.Signals, types.Signal{
+				Probe:   "blast-radius",
+				Message: "Dependency cone unknown — the probe build timed out. This is not evidence that plan files have no dependents.",
+			})
+		case blastResult != nil && len(blastResult.DependentFiles) > 0:
 			result.Signals = append(result.Signals, types.Signal{
 				Probe:   "blast-radius",
 				Message: fmt.Sprintf("Plan files have %d dependent files (probed %d plan files)", len(blastResult.DependentFiles), blastResult.ProbedFiles),
@@ -1042,4 +1051,3 @@ func confidenceVerb(confidence string) string {
 	}
 	return "frequently"
 }
-

@@ -6,6 +6,7 @@
 package simulate
 
 import (
+	"errors"
 	"fmt"
 	"go/parser"
 	"go/token"
@@ -25,8 +26,12 @@ type SpikeResult struct {
 	Predictions   []SpikePrediction    `json:"predictions"`
 	Obligations   []Obligation         `json:"obligations,omitempty"`   // MUST-change files
 	OpenDecisions []types.OpenDecision `json:"openDecisions,omitempty"` // plan gaps the spike guessed past
-	FileBlocks    map[string]string    `json:"-"`
-	Cost          types.CostSummary    `json:"cost"` // API token usage
+	// DegradedProbes names probes that did not complete. Their absence from
+	// Obligations means "not measured", not "nothing found" — without this the
+	// two are indistinguishable downstream.
+	DegradedProbes []string          `json:"degradedProbes,omitempty"`
+	FileBlocks     map[string]string `json:"-"`
+	Cost           types.CostSummary `json:"cost"` // API token usage
 }
 
 // SpikePrediction is a file the engineer touched during implementation.
@@ -97,12 +102,16 @@ func RunSpike(cwd string, graph *refgraph.Graph, planFiles []string,
 
 			// Run obligation extraction on agent's code blocks
 			var obligations []Obligation
+			var degradedProbes []string
 			if len(agentResult.FileBlocks) > 0 {
 				obligations = ExtractObligations(agentResult.FileBlocks, graph, planFiles, cwd)
 
 				// BUILD-AND-CHECK: apply spike code via go build -overlay.
 				// The compiler finds files that MUST change — near-100% precision.
 				buildResult, buildErr := RunBuildCheck(agentResult.FileBlocks, cwd)
+				if errors.Is(buildErr, ErrProbeTimeout) {
+					degradedProbes = append(degradedProbes, "build-check: probe build timed out; compiler obligations not measured")
+				}
 				if buildErr == nil && buildResult != nil {
 					for _, bo := range buildResult.Obligations {
 						if planFileSet[bo.File] {
@@ -150,6 +159,9 @@ func RunSpike(cwd string, graph *refgraph.Graph, planFiles []string,
 				}
 				if len(targetedBlocks) > 0 {
 					buildResult, buildErr := RunBuildCheck(targetedBlocks, cwd)
+					if errors.Is(buildErr, ErrProbeTimeout) {
+						degradedProbes = append(degradedProbes, "targeted-build-check: probe build timed out; compiler obligations not measured")
+					}
 					if buildErr == nil && buildResult != nil {
 						for _, bo := range buildResult.Obligations {
 							if planFileSet[bo.File] {
@@ -176,11 +188,12 @@ func RunSpike(cwd string, graph *refgraph.Graph, planFiles []string,
 			}
 
 			return &SpikeResult{
-				Predictions:   predictions,
-				Obligations:   obligations,
-				OpenDecisions: agentResult.OpenDecisions,
-				FileBlocks:    agentResult.FileBlocks,
-				Cost:          agentResult.Cost,
+				Predictions:    predictions,
+				Obligations:    obligations,
+				OpenDecisions:  agentResult.OpenDecisions,
+				FileBlocks:     agentResult.FileBlocks,
+				Cost:           agentResult.Cost,
+				DegradedProbes: degradedProbes,
 			}, nil
 		}
 	}
